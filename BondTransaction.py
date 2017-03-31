@@ -19,30 +19,29 @@ excel_title = [u"成交时间",u"期限",u"债券代码",u"债券简称",u"利�
 
 def import_text(txtpath,xlpath,date):
     print "-------import from txt----------"
-    f = open(txtpath, 'r+')
-    row_list = []
     punc = [" ", "\t"]
+    agency = ""
+    bond_type = ""
+    agency_list = [u"平安信用", u"平安利率", u"BGC信用", u"国际信用", u"国际利率", u"国利信用", u"国利利率", u"信唐"]
+    bond_list = [u"短融", u"企业债", u"公司债", u"其他", u"存单", u"国债", u"金融债", u"中票", u"金融债（固息）"]
+    row_list = []
+    export_data = []
+
+    f = open(txtpath, 'r+')
     for row in f:
         temp =''.join([cell if cell not in punc else ' ' for cell in row]).split()
         row_list.append(temp)
-    workbook = xlwt.Workbook()
-    worksheet = workbook.add_sheet('Sheet1')
-    i = 1
-    agency = ""
-    bond_type = ""
+
     get_agency = lambda x: x if x in agency_list else agency
-    agency_list = [u"平安信用",u"平安利率",u"BGC信用",u"国际信用",u"国际利率",u"国利信用",u"国利利率",u"信唐"]
-    bond_list =[u"短融",u"企业债", u"公司债", u"其他",u"存单",u"国债",u"金融债",u"中票", u"金融债（固息）"]
     get_bond_type  = lambda x: x if x in bond_list else bond_type
 
-    for index in range(len(excel_title)):
-        worksheet.write(0,index,excel_title[index])
     for row in row_list:
+
         if len(row)==1:
             value = row[0].decode('gb2312').strip(u"： 成交")
             agency = get_agency(value)
             bond_type = get_bond_type(value)
-        elif (len(row)>1) and (bond_type != u"国债") and(bond_type != u"金融债")and(bond_type != u"金融债（固息）"):
+        elif (len(row)>1) and (bond_type not in [u"国债", u"金融债", u"金融债（固息）"]):
             if agency ==u"平安信用":
                 temp = row[2]
                 row[2]= row[1]
@@ -51,15 +50,16 @@ def import_text(txtpath,xlpath,date):
                 temp = row[3]
                 row[3]= row[4]
                 row[4]= temp
-
-            worksheet.write(i,0,date)
-            for j in range(1,len(row)+1):
-                value = row[j-1].strip()
-                worksheet.write(i, j, value.decode('gb2312'))
-            worksheet.write(i, len(row)+1, bond_type)
-            worksheet.write(i, len(row)+2, agency)
-            i+=1
-    workbook.save(xlpath)
+            temp_row = []
+            temp_row.append(date)
+            for item in row:
+                value = item.strip()
+                print value
+                temp_row.append(value.decode('gb2312'))
+            temp_row.append(bond_type)
+            temp_row.append(agency)
+            export_data.append(temp_row)
+    export_excel(export_data,xlpath)
 
 def import_excel(xlpath, dbpath):
     print "-------import from excel----------"
