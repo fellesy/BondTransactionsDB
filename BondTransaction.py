@@ -54,7 +54,6 @@ def import_text(txtpath,xlpath,date):
             temp_row.append(date)
             for item in row:
                 value = item.strip()
-                print value
                 temp_row.append(value.decode('gb2312'))
             temp_row.append(bond_type)
             temp_row.append(agency)
@@ -153,16 +152,20 @@ def adjust_row(data):
     re_term = u"[0-9.]+[DMYdmy]"
     pattern = re.compile(re_term)
     result = re.match(pattern,data[1])
+
     term = ""
     term2 = ""
     if result != None:
         term = result.group(0)
+        print "term " + term
+        print "data[1]" + data[1]
         re_term_plus = u"[+][0-9.]+[DMYdmy]"
         pattern_plus = re.compile(re_term_plus)
-        result_plus = re.search(pattern_plus,data[0])
+        result_plus = re.search(pattern_plus,data[1])
 
         if result_plus!=None:
             term2 = result_plus.group(0)
+            print "term  "  + term + " term2 " + term2
         adjusted_data.append(StrToDays(term)+StrToDays(term2))
 
     re_price = u"[0-9]{1,2}[.]+[0-9]+"
@@ -189,25 +192,33 @@ def rating_index(rating):
     if rating in rating_list:
         return rating_list.index(rating)
 
-def test_date_format(*date):
+def IsDate(*date):
     re_date = u"^(?:(?!0000)[0-9]{4}-(?:(?:0[1-9]|1[0-2])-(?:0[1-9]|1[0-9]|2[0-8])|(?:0[13-9]|1[0-2])-(?:29|30)|(?:0[13578]|1[02])-31)|(?:[0-9]{2}(?:0[48]|[2468][048]|[13579][26])|(?:0[48]|[2468][048]|[13579][26])00)-02-29)$"
     p = re.compile(re_date)
     results =[]
-    print date
     for item in date:
         result = re.match(p, item)
         if result!= None:
             results.append(result.group(0))
-            print result.group(0)
-
     if len(results) == len(date):
         return True
     else:
         dlg = wx.MessageDialog(None, u"日期格式错误", u"错误提示", wx.YES_NO | wx.ICON_QUESTION)
         if dlg.ShowModal() == wx.ID_YES:
-            #     self.Close(True)
             dlg.Destroy()
         return False
+
+def IsNumber(*number):
+    try:
+        for item in number:
+            float(item)
+        return True
+    except:
+        dlg = wx.MessageDialog(None, u"数字错误", u"错误提示", wx.YES_NO | wx.ICON_QUESTION)
+        if dlg.ShowModal() == wx.ID_YES:
+            dlg.Destroy()
+        return False
+
 
 class MainWindow(wx.Frame):
     def __init__(self, parent, title):
@@ -236,20 +247,29 @@ class MainWindow(wx.Frame):
         self.bond_types = [u"短融",u"企业债", u"公司债",u"存单",u"中票",u"其他"]
         self.ratings = ["AAA+", "AAA", "AAA-", "AA+", "AA", "AA-", "BBB+", "BBB", "BBB-", "BB+", "BB", "BB-", "B+", "B","B-"]
         self.agencies =[u"平安信用",u"平安利率",u"BGC信用",u"国际信用",u"国际利率",u"国利信用",u"国利利率",u"信唐"]
-        self.BondTypeTree = TreeCtrl(parent =bkg,id = wx.NewId(), pos=(20,150),
+        self.term_units=[[u"年",u"月",u"日"],[360,30,1]]
+        self.BondTypeTree = TreeCtrl(parent =bkg,id = wx.NewId(), pos=(20,160),
                                      size =(150,100),root=u"全部类型",items=self.bond_types)
-        self.CRTree = TreeCtrl(parent =bkg,id = wx.NewId(),pos=(200,150),
+        self.CRTree = TreeCtrl(parent =bkg,id = wx.NewId(),pos=(200,160),
                                      size =(150,100),root=u"全部评级",items=self.ratings)
-        self.AgencyTree = TreeCtrl(parent =bkg,id = wx.NewId(), pos=(380,150),
+        self.AgencyTree = TreeCtrl(parent =bkg,id = wx.NewId(), pos=(380,160),
                                      size =(150,100),root=u"全部中介",items=self.agencies)
         self.label1 = wx.StaticText(bkg, -1, u"开始时间", pos=(20, 60))
         self.label2 = wx.StaticText(bkg, -1, u"结束时间", pos=(260, 60))
-        self.label3 = wx.StaticText(bkg, -1, u"最高利率", pos=(20, 90))
-        self.label4 = wx.StaticText(bkg, -1, u"最低利率", pos=(260, 90))
+        self.label3 = wx.StaticText(bkg, -1, u"最低利率", pos=(20, 90))
+        self.label4 = wx.StaticText(bkg, -1, u"最高利率", pos=(260, 90))
+        self.label5 = wx.StaticText(bkg, -1, u"最小期限", pos=(20, 120))
+        self.label6 = wx.StaticText(bkg, -1, u"最大期限", pos=(260, 120))
         self.StartDateText = wx.TextCtrl(bkg,-1,size=(150,25),pos = (80,60),value=get_time(1))
         self.EndDateText   = wx.TextCtrl(bkg,-1,size=(150,25), pos = (350,60),value=get_time(1))
-        self.MaxPriceText = wx.TextCtrl(bkg,-1,size=(150,25),pos = (80,90),value = "4.80")
-        self.MinPriceText   = wx.TextCtrl(bkg,-1,size=(150,25), pos = (350,90),value="4.51")
+        self.MaxPriceText = wx.TextCtrl(bkg,-1,size=(150,25),pos = (350,90),value = "4.80")
+        self.MinPriceText   = wx.TextCtrl(bkg,-1,size=(150,25), pos = (80,90),value="4.51")
+        self.MaxTermText = wx.TextCtrl(bkg,-1,size=(70,25),pos = (350,120),value = "10")
+        self.MinTermText   = wx.TextCtrl(bkg,-1,size=(70,25), pos = (80,120),value="1")
+        self.term_unit_cb1 = wx.ComboBox(bkg,id= wx.NewId(),choices=self.term_units[0],
+                                         size=(70,25),pos =(430,120))
+        self.term_unit_cb2 = wx.ComboBox(bkg,id= wx.NewId(),choices=self.term_units[0],
+                                         size=(70,25),pos =(160,120),value=u"日")
 
         self.txtpath   = ""
         self.xlpath    = ""
@@ -274,9 +294,9 @@ class MainWindow(wx.Frame):
         self.DBFrame = wx.Frame(None,title=u"数据库操作", size = (300,300))
         self.DBFrame.Show()
         p = wx.Panel(self.DBFrame,size =(500,300))
-        create_db_btn = wx.Button(p,label=u"新建数据库",pos=(20,20),size=(140,50))
-        choose_db_btn = wx.Button(p,label = u"选择默认数据库",pos=(20,60),size=(140,50))
-        del_db_btn = wx.Button(p,label = u"删除数据库",pos=(20,100),size=(140,50))
+        create_db_btn = wx.Button(p,label=u"新建数据库",pos=(20,20),size=(140,30))
+        choose_db_btn = wx.Button(p,label = u"选择默认数据库",pos=(20,60),size=(140,30))
+        del_db_btn = wx.Button(p,label = u"删除数据库",pos=(20,100),size=(140,30))
         create_db_btn.Bind(wx.EVT_BUTTON,self.OnCreateDB)
         choose_db_btn.Bind(wx.EVT_BUTTON, self.OnChooseDefaultDB)
         del_db_btn.Bind(wx.EVT_BUTTON, self.OnDelDB)
@@ -365,7 +385,6 @@ class MainWindow(wx.Frame):
         try:
             pickle.dump(dbs, open('dbs.pkl', 'wb'))
             print "Set dbs " + str(dbs)
-            print "successful Get dbs " + str(self.GetDBs())
         except:
             print "fail to set dbs"
 
@@ -393,7 +412,7 @@ class MainWindow(wx.Frame):
         wildcard = u"Excel 文件(*.xls)|.xls|"
         dialog = wx.FileDialog(None, "Save an Excel file...",wildcard=wildcard, style=wx.SAVE)
         if dialog.ShowModal() == wx.ID_OK:
-            self.xlpath_ex = dialog.GetPath().encode('utf-8')
+            self.xlpath_ex = dialog.GetPath()#.encode('utf-8')
             export_excel(self.export_data,self.xlpath_ex)
 
 
@@ -401,18 +420,18 @@ class MainWindow(wx.Frame):
         datedlg = wx.TextEntryDialog(None,  u"请输入成交日期","", get_time(1))
         if datedlg.ShowModal() == wx.ID_OK:
             date = datedlg.GetValue()
-            if test_date_format(date):
+            if IsDate(date):
                 self.date = date
                 dialog = wx.FileDialog(None, "Choose a txt file...", style=wx.OPEN)
                 if dialog.ShowModal() == wx.ID_OK:
-                    self.txtpath = dialog.GetPath().encode('utf-8')
+                    self.txtpath = dialog.GetPath()#.encode('utf-8')
                     dialog.Destroy()
                     datedlg.Destroy()
 
                     wildcard = u"Excel 文件(*.xls)|.xls|"
                     dialog2 = wx.FileDialog(None, "Save an Excel file...", wildcard=wildcard, style=wx.SAVE)
                     if dialog2.ShowModal() == wx.ID_OK:
-                        self.xlpath = dialog2.GetPath().encode('utf-8')
+                        self.xlpath = dialog2.GetPath()#.encode('utf-8')
                         import_text(self.txtpath,self.xlpath,date=date)
                         dialog2.Destroy()
 
@@ -420,7 +439,7 @@ class MainWindow(wx.Frame):
     def onImportExcel(self, e):
         dialog = wx.FileDialog(None, "Choose an excel file...", style=wx.OPEN)
         if dialog.ShowModal() == wx.ID_OK:
-            self.xlpath = dialog.GetPath().encode('utf-8')
+            self.xlpath = dialog.GetPath()#.encode('utf-8')
             import_excel(xlpath= self.xlpath,dbpath=self.dbpath)
             dialog.Destroy()
 
@@ -431,13 +450,21 @@ class MainWindow(wx.Frame):
         start_date = self.StartDateText.GetValue()
         end_date = self.EndDateText.GetValue()
 
+        max_term = self.MaxTermText.GetValue()
+        max_unit =self.term_units[1][self.term_units[0].index(self.term_unit_cb1.GetValue())]
+
+        min_term = self.MinTermText.GetValue()
+        min_unit = self.term_units[1][self.term_units[0].index(self.term_unit_cb2.GetValue())]
+
         bond_types = self.BondTypeTree.get_checked_item()
         ratings = self.CRTree.get_checked_item()
         agencies = self.AgencyTree.get_checked_item()
 
-        if test_date_format(start_date,end_date):
+
+        if IsDate(start_date,end_date) and IsNumber(min_term,max_term):
             self.filter = " SELECT * FROM TR WHERE (" + max_price + " >= price) AND (price >= " + min_price + ")"
             self.filter += " AND (" + end_date.replace("-", "") + " >= date) AND( date >= " + start_date.replace("-", "") + ")"
+            self.filter += "AND (" + str(int(float(max_term) * float(max_unit))) + ">= term) AND ( term>= " + str(int(float(min_term)*float(min_unit))) +")"
 
             if (bond_types != self.bond_types) and(len(bond_types)!=0):
                 self.filter += " AND ( "
