@@ -9,7 +9,6 @@ import time
 import sqlite3
 import re
 import sys
-import os
 import pickle
 import wx.lib.agw.customtreectrl as CT
 
