@@ -80,11 +80,22 @@ def export_excel(data,xlpath):
     print "-------export to excel----------"
     workbook = xlwt.Workbook()
     worksheet = workbook.add_sheet('Sheet1')
+    badBG = xlwt.Pattern()
+    badBG.pattern = badBG.SOLID_PATTERN
+    badBG.pattern_fore_colour = 3
+
+    badFontStyle = xlwt.XFStyle()
+    badFontStyle.pattern = badBG
+
     for j in range(len(excel_title)):
         worksheet.write(0,j,excel_title[j])
     for i in range(1,len(data)):
-        for j in range(len(data[i])):
-            worksheet.write(i,j,data[i][j])
+        if len(data[i])!=8:
+            for j in range(len(data[i]),):
+                worksheet.write(i,j,data[i][j],badFontStyle)
+        else:
+            for j in range(len(data[i])):
+                worksheet.write(i, j, data[i][j])
     workbook.save(xlpath)
 
 def create_table(open_path):
@@ -131,6 +142,47 @@ def select_table(open_path,filter_clause= "SELECT * FROM TR "):
         return cursor.fetchall()
     except:
         return []
+
+def search_table(open_path,item, keyword):
+    conn = sqlite3.connect(open_path)
+    cursor = conn.cursor()
+    clause= "SELECT date, term_text, bond_id, name, price_text, rating, type, agency  FROM TR WHERE name like '%" + keyword +"%'"
+    print clause
+    cursor.execute(clause)#"SELECT name FROM TR WHERE ? like ?", (item,"%" + keyword +"%")
+    result = cursor.fetchall()
+    print "first shot of search "+ str(result)
+
+    if len(result) == 0:
+        cursor.execute("SELECT name FROM TR")
+        collection = []
+        names = cursor.fetchall()
+        for name in names:
+            collection.append(name[0])
+        fuzzy_results = fuzzyFinder(keyword,collection=collection)
+        print fuzzy_results
+        for item in fuzzy_results:
+            cursor.execute("SELECT date, term_text, bond_id, name, price_text, rating, type, agency FROM TR WHERE name=?",(item,))
+            result.append(cursor.fetchone())
+
+    return result
+
+def fuzzyFinder(keyword,collection):
+    suggestions =[]
+    collection2 = []
+    for item in collection:
+        collection2.append(item)#.encode('gb2312'))
+
+    user_input = keyword#.encode('gb2312')
+    pattern = '.*'.join(keyword)  # Converts 'djm' to 'd.*j.*m'
+    #pattern = '[' + keyword +']'
+    print pattern
+    regex = re.compile(pattern)  # Compiles a regex.
+    for item in collection2:
+        match = regex.search(item)  # Checks if the current item matches the regex.
+        if match:
+            suggestions.append(item)
+    print suggestions
+    return suggestions
 
 def get_time(type = 0):
     if type==0:
@@ -221,23 +273,27 @@ def IsNumber(*number):
 
 class MainWindow(wx.Frame):
     def __init__(self, parent, title):
-        wx.Frame.__init__(self, parent, title = title,size = (550,300))
+        wx.Frame.__init__(self, parent, title = title,size = (600,300))
         self.gaugeFrame = GaugeFrame()
         #self.control = wx.TextCtrl(self, style=wx.TE_MULTILINE)
         bkg = wx.Panel(self,style=wx.TAB_TRAVERSAL | wx.CLIP_CHILDREN | wx.FULL_REPAINT_ON_RESIZE)
+
+        search_button = wx.Button(bkg, label=u"搜索",size=(50,25), pos = (520,20))
+        self.search_text = wx.TextCtrl(bkg,size = (100,25), pos = (420,25))
+        search_button.Bind(wx.EVT_BUTTON, self.OnSearch)
         txt_button = wx.Button(bkg, label = u"导入 txt", pos=(20,20))
         txt_button.Bind(wx.EVT_BUTTON, self.onImportTxt)
 
         xl_button = wx.Button(bkg, label=u"导入excel", pos=(120,20))
         xl_button.Bind(wx.EVT_BUTTON, self.onImportExcel)
+        #
+        # ex_button = wx.Button(bkg, label=u"导出excel", pos=(220,20))
+        # ex_button.Bind(wx.EVT_BUTTON, self.OnExport)
 
-        ex_button = wx.Button(bkg, label=u"导出excel", pos=(220,20))
-        ex_button.Bind(wx.EVT_BUTTON, self.onExport)
-
-        getdata_button = wx.Button(bkg, label=u"提取数据", pos = (320,20))
+        getdata_button = wx.Button(bkg, label=u"提取数据", pos = (220,20))
         getdata_button.Bind(wx.EVT_BUTTON, self.onGetData)
 
-        db_button = wx.Button(bkg,label = u"数据库操作", pos =(420,20))
+        db_button = wx.Button(bkg,label = u"数据库操作", pos =(320,20))
         db_button.Bind(wx.EVT_BUTTON,self.OnDB)
 
 
@@ -299,6 +355,12 @@ class MainWindow(wx.Frame):
         create_db_btn.Bind(wx.EVT_BUTTON,self.OnCreateDB)
         choose_db_btn.Bind(wx.EVT_BUTTON, self.OnChooseDefaultDB)
         del_db_btn.Bind(wx.EVT_BUTTON, self.OnDelDB)
+
+    def OnSearch(self,e):
+        print self.search_text.GetValue()
+        search_result = search_table(self.dbpath,"name",self.search_text.GetValue())
+        self.data = search_result
+        self.GetData(index=0)
 
     def OnCreateDB(self,e):
         self.CreateDB()
@@ -389,6 +451,10 @@ class MainWindow(wx.Frame):
 
     def onGetData(self,e):
         self.data = select_table(self.dbpath,self.GetFilter())
+        print "self.data " + str(self.data)
+        self.GetData()
+
+    def GetData(self,index = 2):
         export_data = []
         export_data.append(excel_title)
         for i in range(len(self.data)):
@@ -398,17 +464,18 @@ class MainWindow(wx.Frame):
                 export_data.append([])
                 export_data[i+1] =[]
                 export_data[i+1].append(temp)
-            for j in range(1,len(self.data[0])-2):
+            for j in range(1,len(self.data[0])-index):
                 export_data[i+1].append(self.data[i][j])
         self.export_data = export_data
-        try:
-            self.xlsFrame = XLFrame(export_data)
-            self.xlsFrame.Show()
-        except:
-            pass
+        print "self.export_data " + str(self.export_data[1])
+        #try:
+        self.xlsFrame = XLFrame(export_data,self.OnExport)
+        self.xlsFrame.Show()
+        #except:
+        #    pass
 
-    def onExport(self,e):
-        wildcard = u"Excel 文件(*.xls)|.xls|"
+    def OnExport(self,e):
+        wildcard = u"Excel 文件(*.xls)|.xls"
         dialog = wx.FileDialog(None, "Save an Excel file...",wildcard=wildcard, style=wx.SAVE)
         if dialog.ShowModal() == wx.ID_OK:
             self.xlpath_ex = dialog.GetPath()#.encode('utf-8')
@@ -427,7 +494,7 @@ class MainWindow(wx.Frame):
                     dialog.Destroy()
                     datedlg.Destroy()
 
-                    wildcard = u"Excel 文件(*.xls)|.xls|"
+                    wildcard = u"Excel 文件(*.xls)|.xls"
                     dialog2 = wx.FileDialog(None, "Save an Excel file...", wildcard=wildcard, style=wx.SAVE)
                     if dialog2.ShowModal() == wx.ID_OK:
                         self.xlpath = dialog2.GetPath()#.encode('utf-8')
@@ -555,10 +622,14 @@ class TreeCtrl(CT.CustomTreeCtrl):
         return self.checked_items
 
 class XLFrame(wx.Frame):
-    def __init__(self,data):
+    def __init__(self,data,export_func=None):
         """Constructor"""
         nrow = len(data)
-        ncol = len(data[0])
+        if nrow <1:
+            ncol = 0
+        else:
+            ncol = len(data[0])
+
         wx.Frame.__init__(self, parent=None, title="data from data base", size=(600,400))
         panel = wx.Panel(self)
 
@@ -575,8 +646,11 @@ class XLFrame(wx.Frame):
                     if (type(data[i][j]) == type(1)) or (type(data[i][j] == type(1.11))):
                         temp = str(temp)
                         myGrid.SetCellValue(i, j, temp)
+        export_button = wx.Button(panel,label=u"导出")
+        export_button.Bind(wx.EVT_BUTTON,export_func)
         sizer = wx.BoxSizer(wx.VERTICAL)
         sizer.Add(myGrid, 1, wx.EXPAND)
+        sizer.Add(export_button,0)
         panel.SetSizer(sizer)
 
 class GaugeFrame(wx.Frame):
