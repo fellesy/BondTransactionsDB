@@ -14,7 +14,7 @@ import wx.lib.agw.customtreectrl as CT
 
 reload(sys)
 sys.setdefaultencoding('utf-8')
-excel_title = [u"成交时间",u"期限",u"债券代码",u"债券简称",u"利率",u"信用评级",u"类型",u"中介机构"]
+excel_title = [u"成交时间",u"期限",u"债券代码",u"债券简称",u"利率",u"信用评级",u"类型",u"中介机构", u"数据库编号"]
 
 def import_text(txtpath,xlpath,date):
     print "-------import from txt----------"
@@ -73,7 +73,8 @@ def import_excel(xlpath, dbpath):
         except:
             pass
     print row_list
-    insert_table(row_list,dbpath)
+    fail_collection = insert_table(row_list,dbpath)
+    return fail_collection
 
 
 def export_excel(data,xlpath):
@@ -103,6 +104,7 @@ def create_table(open_path):
     cursor = conn.cursor()
     try:
         cursor.execute('''CREATE TABLE TR (
+                        id INTEGER PRIMARY KEY ,
                         date long,
                         term_text text,
                         bond_id text,
@@ -117,24 +119,31 @@ def create_table(open_path):
         print "-------create table successfully--------"
     except:
         print "fail to create table"
-        cursor.execute("DROP TABLE TR")
-        create_table(open_path)
     conn.close()
 
 def insert_table(data, open_path):
     print "------insert_table------"
     conn = sqlite3.connect(open_path)
     cursor = conn.cursor()
+    fail_collection = []
+    cursor.execute("SELECT MAX(id) FROM TR")
+    i = cursor.fetchone()[0]+1
+    print i
     for item in data:
+        temp = (i,) + item
+        print temp
         try:
-            cursor.execute("INSERT INTO TR VALUES(?,?,?,?,?,?,?,?,?,?);",item)
+            cursor.execute("INSERT INTO TR VALUES(?,?,?,?,?,?,?,?,?,?,?);",temp)
+            i+=1
         except:
             print "fail to insert"
-            print len(item)
+            fail_collection.append(item)
+
     conn.commit()
     conn.close()
+    return fail_collection
 
-def select_table(open_path,filter_clause= "SELECT * FROM TR "):
+def select_table(open_path,filter_clause= "SELECT date, term_text, bond_id, name, price_text, rating, type, agency,id FROM TR "):
     conn = sqlite3.connect(open_path)
     cursor = conn.cursor()
     try:
@@ -146,13 +155,13 @@ def select_table(open_path,filter_clause= "SELECT * FROM TR "):
 def search_table(open_path,item, keyword):
     conn = sqlite3.connect(open_path)
     cursor = conn.cursor()
-    clause= "SELECT date, term_text, bond_id, name, price_text, rating, type, agency  FROM TR WHERE name like '%" + keyword +"%'"
+    clause= "SELECT date, term_text, bond_id, name, price_text, rating, type, agency, id  FROM TR WHERE "+item+ " like '%" + keyword +"%'"
     print clause
     cursor.execute(clause)#"SELECT name FROM TR WHERE ? like ?", (item,"%" + keyword +"%")
     result = cursor.fetchall()
     print "first shot of search "+ str(result)
 
-    if len(result) == 0:
+    if (len(result) == 0) and (item =="name"):
         cursor.execute("SELECT name FROM TR")
         collection = []
         names = cursor.fetchall()
@@ -161,28 +170,50 @@ def search_table(open_path,item, keyword):
         fuzzy_results = fuzzyFinder(keyword,collection=collection)
         print fuzzy_results
         for item in fuzzy_results:
-            cursor.execute("SELECT date, term_text, bond_id, name, price_text, rating, type, agency FROM TR WHERE name=?",(item,))
+            cursor.execute("SELECT date, term_text, bond_id, name, price_text, rating, type, agency, id FROM TR WHERE name=?",(item,))
             result.append(cursor.fetchone())
 
+    conn.close()
     return result
+
+def del_row_table(open_path, id):
+    print "----------delete data in table----------"
+    conn = sqlite3.connect(open_path)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM TR WHERE ID = ?", (id,))
+    conn.commit()
+    conn.close()
+
+
+    conn = sqlite3.connect(open_path)
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, date, name FROM TR WHERE (id > ?) AND(id< ?)",(int(id)-3,int(id)+3))
+    print cursor.fetchall()
+
+
 
 def fuzzyFinder(keyword,collection):
     suggestions =[]
-    collection2 = []
-    for item in collection:
-        collection2.append(item)#.encode('gb2312'))
-
     user_input = keyword#.encode('gb2312')
     pattern = '.*'.join(keyword)  # Converts 'djm' to 'd.*j.*m'
-    #pattern = '[' + keyword +']'
-    print pattern
     regex = re.compile(pattern)  # Compiles a regex.
-    for item in collection2:
+    for item in collection:
         match = regex.search(item)  # Checks if the current item matches the regex.
         if match:
             suggestions.append(item)
-    print suggestions
-    return suggestions
+    if suggestions:
+        return suggestions
+    else:
+        print " no perfect match. Find similar results"
+        pattern = '[' + keyword +']+'
+        regex = re.compile(pattern)
+        for item in collection:
+            match = regex.search(item)
+            if match:
+                suggestions.append(item)
+        return suggestions
+
+
 
 def get_time(type = 0):
     if type==0:
@@ -191,7 +222,7 @@ def get_time(type = 0):
         return time.strftime('%Y-%m-%d',time.localtime(time.time()))
 
 def adjust_row(data):
-    print "-------adjust row data----------"
+    #print "-------adjust row data----------"
     date = data[0]
     date = int(date.replace("-",""))#insert(0,int(date.replace("-","")))
     adjusted_data = []
@@ -208,20 +239,18 @@ def adjust_row(data):
     term2 = ""
     if result != None:
         term = result.group(0)
-        print "term " + term
-        print "data[1]" + data[1]
         re_term_plus = u"[+][0-9.]+[DMYdmy]"
         pattern_plus = re.compile(re_term_plus)
         result_plus = re.search(pattern_plus,data[1])
 
         if result_plus!=None:
             term2 = result_plus.group(0)
-            print "term  "  + term + " term2 " + term2
+            # print "term  "  + term + " term2 " + term2
         adjusted_data.append(StrToDays(term)+StrToDays(term2))
 
     re_price = u"[0-9]{1,2}[.]+[0-9]+"
     pattern = re.compile(re_price)
-    result = re.match(pattern,data[4])
+    result = re.match(pattern,str(data[4]))
     if result!= None:
         price = float(result.group(0))
         adjusted_data.append(price)
@@ -273,58 +302,65 @@ def IsNumber(*number):
 
 class MainWindow(wx.Frame):
     def __init__(self, parent, title):
-        wx.Frame.__init__(self, parent, title = title,size = (600,300))
+        wx.Frame.__init__(self, parent, title = title,size = (650,300))
         self.gaugeFrame = GaugeFrame()
+        ANCHOR = 20
+        SPACE = 10
+        WIDTH = 80
+        HEIGHT = 25
+
+        self.bond_types = [u"短融",u"企业债", u"公司债",u"存单",u"中票",u"其他"]
+        self.ratings = ["AAA+", "AAA", "AAA-", "AA+", "AA", "AA-", "BBB+", "BBB", "BBB-", "BB+", "BB", "BB-", "B+", "B","B-"]
+        self.agencies =[u"平安信用",u"平安利率",u"BGC信用",u"国际信用",u"国际利率",u"国利信用",u"国利利率",u"信唐"]
+        self.term_units=[[u"年",u"月",u"日"],[365,30,1]]
+        self.search_column = [[u"简称", u"代码"],["name","bond_id"]]
         #self.control = wx.TextCtrl(self, style=wx.TE_MULTILINE)
         bkg = wx.Panel(self,style=wx.TAB_TRAVERSAL | wx.CLIP_CHILDREN | wx.FULL_REPAINT_ON_RESIZE)
-
-        search_button = wx.Button(bkg, label=u"搜索",size=(50,25), pos = (520,20))
-        self.search_text = wx.TextCtrl(bkg,size = (100,25), pos = (420,25))
-        search_button.Bind(wx.EVT_BUTTON, self.OnSearch)
-        txt_button = wx.Button(bkg, label = u"导入 txt", pos=(20,20))
-        txt_button.Bind(wx.EVT_BUTTON, self.onImportTxt)
-
-        xl_button = wx.Button(bkg, label=u"导入excel", pos=(120,20))
-        xl_button.Bind(wx.EVT_BUTTON, self.onImportExcel)
         #
         # ex_button = wx.Button(bkg, label=u"导出excel", pos=(220,20))
         # ex_button.Bind(wx.EVT_BUTTON, self.OnExport)
 
-        getdata_button = wx.Button(bkg, label=u"提取数据", pos = (220,20))
+        getdata_button = wx.Button(bkg, label=u"提取数据", size = (WIDTH,HEIGHT), pos = (ANCHOR+(WIDTH+SPACE)*5.5,ANCHOR))
         getdata_button.Bind(wx.EVT_BUTTON, self.onGetData)
 
-        db_button = wx.Button(bkg,label = u"数据库操作", pos =(320,20))
+        txt_button = wx.Button(bkg, label = u"导入 txt", size = (WIDTH,HEIGHT), pos=(ANCHOR+(WIDTH+SPACE)*5.5,ANCHOR+(HEIGHT+SPACE)*1))
+        txt_button.Bind(wx.EVT_BUTTON, self.onImportTxt)
+
+        xl_button = wx.Button(bkg, label=u"导入excel", size = (WIDTH,HEIGHT), pos=(ANCHOR+(WIDTH+SPACE)*5.5,ANCHOR+(HEIGHT+SPACE)*2))
+        xl_button.Bind(wx.EVT_BUTTON, self.onImportExcel)
+
+        db_button = wx.Button(bkg,label = u"数据库操作",size = (WIDTH,HEIGHT), pos =(ANCHOR+(WIDTH+SPACE)*5.5,ANCHOR+(HEIGHT+SPACE)*3))
         db_button.Bind(wx.EVT_BUTTON,self.OnDB)
 
+        search_button = wx.Button(bkg, label=u"搜索",size=(WIDTH*0.8,HEIGHT), pos = (ANCHOR+WIDTH+WIDTH/1.5,ANCHOR))
+        self.search_text = wx.TextCtrl(bkg,size = (WIDTH,HEIGHT), style= wx.TE_PROCESS_ENTER, pos = (ANCHOR,ANCHOR))
+        self.search_text.Bind(wx.EVT_TEXT_ENTER, self.OnSearch)
+        search_button.Bind(wx.EVT_BUTTON, self.OnSearch)
+        self.search_column_cb = wx.ComboBox(bkg,choices=self.search_column[0], size=(WIDTH/1.5,HEIGHT),pos =(ANCHOR+WIDTH,ANCHOR))
 
-        #wx.StaticText(bkg, -1, u"债券类型", pos=(20, 120))
-        #wx.StaticText(bkg, -1, u"信用评级", pos=(260, 120))
-        self.bond_types = [u"短融",u"企业债", u"公司债",u"存单",u"中票",u"其他"]
-        self.ratings = ["AAA+", "AAA", "AAA-", "AA+", "AA", "AA-", "BBB+", "BBB", "BBB-", "BB+", "BB", "BB-", "B+", "B","B-"]
-        self.agencies =[u"平安信用",u"平安利率",u"BGC信用",u"国际信用",u"国际利率",u"国利信用",u"国利利率",u"信唐"]
-        self.term_units=[[u"年",u"月",u"日"],[360,30,1]]
-        self.BondTypeTree = TreeCtrl(parent =bkg,id = wx.NewId(), pos=(20,160),
-                                     size =(150,100),root=u"全部类型",items=self.bond_types)
-        self.CRTree = TreeCtrl(parent =bkg,id = wx.NewId(),pos=(200,160),
-                                     size =(150,100),root=u"全部评级",items=self.ratings)
-        self.AgencyTree = TreeCtrl(parent =bkg,id = wx.NewId(), pos=(380,160),
-                                     size =(150,100),root=u"全部中介",items=self.agencies)
-        self.label1 = wx.StaticText(bkg, -1, u"开始时间", pos=(20, 60))
+
+        self.BondTypeTree = TreeCtrl(parent =bkg,id = wx.NewId(), pos=(ANCHOR,ANCHOR+(HEIGHT+SPACE)*4),
+                                     size =(WIDTH*1.8,HEIGHT*3),root=u"全部类型",items=self.bond_types)
+        self.CRTree = TreeCtrl(parent =bkg,id = wx.NewId(),pos=(ANCHOR+WIDTH*1.9+SPACE,ANCHOR+(HEIGHT+SPACE)*4),
+                                     size =(WIDTH*1.8,HEIGHT*3),root=u"全部评级",items=self.ratings)
+        self.AgencyTree = TreeCtrl(parent =bkg,id = wx.NewId(), pos=(ANCHOR+WIDTH*1.9*2+SPACE*2,ANCHOR+(HEIGHT+SPACE)*4),
+                                     size =(WIDTH*1.8,HEIGHT*3),root=u"全部中介",items=self.agencies)
+        self.label1 = wx.StaticText(bkg, -1, u"开始时间", pos=(ANCHOR, 60))
         self.label2 = wx.StaticText(bkg, -1, u"结束时间", pos=(260, 60))
-        self.label3 = wx.StaticText(bkg, -1, u"最低利率", pos=(20, 90))
+        self.label3 = wx.StaticText(bkg, -1, u"最低利率", pos=(ANCHOR, 90))
         self.label4 = wx.StaticText(bkg, -1, u"最高利率", pos=(260, 90))
-        self.label5 = wx.StaticText(bkg, -1, u"最小期限", pos=(20, 120))
+        self.label5 = wx.StaticText(bkg, -1, u"最小期限", pos=(ANCHOR, 120))
         self.label6 = wx.StaticText(bkg, -1, u"最大期限", pos=(260, 120))
-        self.StartDateText = wx.TextCtrl(bkg,-1,size=(150,25),pos = (80,60),value=get_time(1))
-        self.EndDateText   = wx.TextCtrl(bkg,-1,size=(150,25), pos = (350,60),value=get_time(1))
-        self.MaxPriceText = wx.TextCtrl(bkg,-1,size=(150,25),pos = (350,90),value = "4.80")
-        self.MinPriceText   = wx.TextCtrl(bkg,-1,size=(150,25), pos = (80,90),value="4.51")
-        self.MaxTermText = wx.TextCtrl(bkg,-1,size=(70,25),pos = (350,120),value = "10")
-        self.MinTermText   = wx.TextCtrl(bkg,-1,size=(70,25), pos = (80,120),value="1")
+        self.StartDateText = wx.TextCtrl(bkg,-1,size=(WIDTH*1.7,HEIGHT),pos = (ANCHOR+WIDTH+SPACE,60),value=get_time(1))
+        self.EndDateText   = wx.TextCtrl(bkg,-1,size=(WIDTH*1.7,HEIGHT), pos = (350,60),value=get_time(1))
+        self.MaxPriceText = wx.TextCtrl(bkg,-1,size=(WIDTH*1.7,HEIGHT),pos = (350,90),value = "4.80")
+        self.MinPriceText   = wx.TextCtrl(bkg,-1,size=(WIDTH*1.7,HEIGHT), pos = (ANCHOR+WIDTH+SPACE,90),value="4.51")
+        self.MaxTermText = wx.TextCtrl(bkg,-1,size=(WIDTH,HEIGHT),pos = (350,120),value = "10")
+        self.MinTermText   = wx.TextCtrl(bkg,-1,size=(WIDTH,HEIGHT), pos = (ANCHOR+WIDTH+SPACE,120),value="1")
         self.term_unit_cb1 = wx.ComboBox(bkg,id= wx.NewId(),choices=self.term_units[0],
-                                         size=(70,25),pos =(430,120))
+                                         size=(WIDTH*0.7,HEIGHT),pos =(430,120),value=u"年")
         self.term_unit_cb2 = wx.ComboBox(bkg,id= wx.NewId(),choices=self.term_units[0],
-                                         size=(70,25),pos =(160,120),value=u"日")
+                                         size=(WIDTH*0.7,HEIGHT),pos =(ANCHOR+(WIDTH)*2+SPACE,120),value=u"日")
 
         self.txtpath   = ""
         self.xlpath    = ""
@@ -344,6 +380,28 @@ class MainWindow(wx.Frame):
                 self.CreateDB()
 
 
+    def OnDelData(self,e):
+        dialog = wx.MessageDialog(None, u"确定要从数据库删除这条记录？删除之后数据将无法恢复", u"提醒", wx.YES_NO | wx.ICON_QUESTION)
+        if dialog.ShowModal() == wx.ID_YES:
+            print "get current selected Range"
+            selected_range = self.xlsFrame.GetCurrentlySelectedRange()
+            for cell in selected_range:
+                row = cell[0]
+                if row > 0:
+                    database_id = self.xlsFrame.GetCellValue(row,8)
+                    try:
+                        if database_id:
+                            del_row_table(self.dbpath, int(database_id) )
+                        print "delete id= " + database_id + " from database successfully"
+
+                        for item in self.data:
+                            if item[8] ==int(database_id):
+                                print "------" +str(item[8])
+                                self.data.remove(item)
+                    except:
+                        print "fail to delete id= " + database_id + " from database"
+            self.xlsFrame.Destroy()
+            self.GetData()
 
     def OnDB(self,e):
         self.DBFrame = wx.Frame(None,title=u"数据库操作", size = (300,300))
@@ -358,9 +416,10 @@ class MainWindow(wx.Frame):
 
     def OnSearch(self,e):
         print self.search_text.GetValue()
-        search_result = search_table(self.dbpath,"name",self.search_text.GetValue())
+        search_column =self.search_column[1][self.search_column[0].index(self.search_column_cb.GetValue())]
+        search_result = search_table(self.dbpath,search_column,self.search_text.GetValue())
         self.data = search_result
-        self.GetData(index=0)
+        self.GetData()
 
     def OnCreateDB(self,e):
         self.CreateDB()
@@ -454,7 +513,7 @@ class MainWindow(wx.Frame):
         print "self.data " + str(self.data)
         self.GetData()
 
-    def GetData(self,index = 2):
+    def GetData(self):
         export_data = []
         export_data.append(excel_title)
         for i in range(len(self.data)):
@@ -464,13 +523,14 @@ class MainWindow(wx.Frame):
                 export_data.append([])
                 export_data[i+1] =[]
                 export_data[i+1].append(temp)
-            for j in range(1,len(self.data[0])-index):
+            for j in range(1,len(self.data[i])):
                 export_data[i+1].append(self.data[i][j])
         self.export_data = export_data
-        print "self.export_data " + str(self.export_data[1])
+        print "self.export_data " + str(self.export_data)
         #try:
-        self.xlsFrame = XLFrame(export_data,self.OnExport)
-        self.xlsFrame.Show()
+        if export_data:
+            self.xlsFrame = XLFrame(export_data,self.OnExport,self.OnDelData)
+            self.xlsFrame.Show()
         #except:
         #    pass
 
@@ -506,8 +566,13 @@ class MainWindow(wx.Frame):
         dialog = wx.FileDialog(None, "Choose an excel file...", style=wx.OPEN)
         if dialog.ShowModal() == wx.ID_OK:
             self.xlpath = dialog.GetPath()#.encode('utf-8')
-            import_excel(xlpath= self.xlpath,dbpath=self.dbpath)
+            self.dbpath = self.GetDBs()[0]
+            fail_collection = import_excel(xlpath= self.xlpath,dbpath=self.dbpath)
             dialog.Destroy()
+            print fail_collection
+            if fail_collection:
+                fail_xlsFrame = XLFrame(fail_collection, title=u"导入失败的数据")
+                fail_xlsFrame.Show()
 
     def GetFilter(self):
         max_price = self.MaxPriceText.GetValue()
@@ -528,7 +593,7 @@ class MainWindow(wx.Frame):
 
 
         if IsDate(start_date,end_date) and IsNumber(min_term,max_term):
-            self.filter = " SELECT * FROM TR WHERE (" + max_price + " >= price) AND (price >= " + min_price + ")"
+            self.filter = " SELECT date, term_text, bond_id, name, price_text, rating, type, agency,id FROM TR WHERE (" + max_price + " >= price) AND (price >= " + min_price + ")"
             self.filter += " AND (" + end_date.replace("-", "") + " >= date) AND( date >= " + start_date.replace("-", "") + ")"
             self.filter += "AND (" + str(int(float(max_term) * float(max_unit))) + ">= term) AND ( term>= " + str(int(float(min_term)*float(min_unit))) +")"
 
@@ -622,36 +687,97 @@ class TreeCtrl(CT.CustomTreeCtrl):
         return self.checked_items
 
 class XLFrame(wx.Frame):
-    def __init__(self,data,export_func=None):
-        """Constructor"""
-        nrow = len(data)
-        if nrow <1:
-            ncol = 0
-        else:
-            ncol = len(data[0])
-
-        wx.Frame.__init__(self, parent=None, title="data from data base", size=(600,400))
+    def __init__(self,data,export_func=None, menu_func = None,title =u"提取数据结果"):
+        wx.Frame.__init__(self, parent=None, title=title, size=(800,600))
         panel = wx.Panel(self)
+        nrow = len(data)
+        ncol = len(data[0])+5
+        self.myGrid = gridlib.Grid(panel)
+        self.myGrid.CreateGrid(nrow, ncol)
+        self.myGrid.Bind(gridlib.EVT_GRID_SELECT_CELL, self.onSingleSelect)
+        self.myGrid.Bind(gridlib.EVT_GRID_CELL_RIGHT_CLICK,self.onSingleSelect)
+        self.myGrid.Bind(gridlib.EVT_GRID_RANGE_SELECT, self.onDragSelection)
+        self.myGrid.Bind(gridlib.EVT_GRID_CELL_RIGHT_CLICK, self.showPopupMenu)
 
-        myGrid = gridlib.Grid(panel)
-        myGrid.CreateGrid(nrow, ncol)
-
+        self.menu_func = menu_func
         for i in range(len(data)):
             for j in range(len(data[i])):
                 temp = ""
                 try:
                     temp = data[i][j]
-                    myGrid.SetCellValue(i, j, temp)
+                    self.myGrid.SetCellValue(i, j, temp)
                 except:
                     if (type(data[i][j]) == type(1)) or (type(data[i][j] == type(1.11))):
                         temp = str(temp)
-                        myGrid.SetCellValue(i, j, temp)
+                        self.myGrid.SetCellValue(i, j, temp)
         export_button = wx.Button(panel,label=u"导出")
         export_button.Bind(wx.EVT_BUTTON,export_func)
+
         sizer = wx.BoxSizer(wx.VERTICAL)
-        sizer.Add(myGrid, 1, wx.EXPAND)
+        sizer.Add(self.myGrid, 1, wx.EXPAND)
         sizer.Add(export_button,0)
         panel.SetSizer(sizer)
+
+        self.currentlySelectedRange = []
+        self.currentlySelectedCell = ()
+
+    def showPopupMenu(self, e):
+        # if not hasattr(self, "popupID1"):
+        #     self.popupID1 = wx.NewId()
+        menu = wx.Menu()
+        # Show how to put an icon in the menu
+        item = wx.MenuItem(menu, wx.NewId(), u"从数据库内移除")
+        #item2 = wx.MenuItem(menu, wx.NewId(), "从表内删除")
+        menu.AppendItem(item)
+        #menu.AppendItem(item2)
+
+        menu.Bind(wx.EVT_MENU,self.menu_func,item)
+        #menu.Bind(wx.EVT_MENU, func1, item)
+        self.PopupMenu(menu)
+        menu.Destroy()
+
+        # ----------------------------------------------------------------------
+    def onDragSelection(self, e):
+        if self.myGrid.GetSelectionBlockTopLeft():
+            top_left = self.myGrid.GetSelectionBlockTopLeft()[0]
+            bottom_right = self.myGrid.GetSelectionBlockBottomRight()[0]
+            self.currentlySelectedRange = self.GetSelectedCells(top_left, bottom_right)
+
+
+
+    def onSingleSelect(self, e):
+        self.currentlySelectedCell = (e.GetRow(),e.GetCol())
+        print "current selected cell " + str(self.currentlySelectedCell)
+        e.Skip()
+
+    def GetSelectedCells(self, top_left, bottom_right):
+        cells = []
+
+        rows_start = top_left[0]
+        rows_end = bottom_right[0]
+
+        cols_start = top_left[1]
+        cols_end = bottom_right[1]
+
+        rows = range(rows_start, rows_end + 1)
+        cols = range(cols_start, cols_end + 1)
+
+        cells.extend([(row, col)
+                      for row in rows
+                      for col in cols])
+        return cells
+
+    def GetCurrentlySelectedCell(self):
+        return self.currentlySelectedCell
+
+    def GetCurrentlySelectedRange(self):
+        if self.currentlySelectedRange:
+            return self.currentlySelectedRange
+        else:
+            return [self.currentlySelectedCell]
+
+    def GetCellValue(self,row,col):
+        return self.myGrid.GetCellValue(row,col)
 
 class GaugeFrame(wx.Frame):
     def __init__(self):
@@ -664,7 +790,7 @@ class GaugeFrame(wx.Frame):
         self.gauge.SetShadowWidth(3)
         self.Bind(wx.EVT_IDLE, self.OnIdle)
 
-    def OnIdle(self, event):
+    def OnIdle(self, e):
         self.count = self.count + 1
         if self.count == 50:
             self.Hide()
@@ -673,5 +799,5 @@ class GaugeFrame(wx.Frame):
 if __name__ == "__main__":
     print get_time()
     app = wx.App(False)
-    frame = MainWindow(None, u'信息导入系统')
+    frame = MainWindow(None, u'债券成交信息数据库')
     app.MainLoop()
