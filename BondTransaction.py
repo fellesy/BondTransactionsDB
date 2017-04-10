@@ -183,8 +183,6 @@ def del_row_table(open_path, id):
     cursor.execute("DELETE FROM TR WHERE ID = ?", (id,))
     conn.commit()
     conn.close()
-
-
     conn = sqlite3.connect(open_path)
     cursor = conn.cursor()
     cursor.execute("SELECT id, date, name FROM TR WHERE (id > ?) AND(id< ?)",(int(id)-3,int(id)+3))
@@ -194,11 +192,11 @@ def del_row_table(open_path, id):
 
 def fuzzyFinder(keyword,collection):
     suggestions =[]
-    user_input = keyword#.encode('gb2312')
-    pattern = '.*'.join(keyword)  # Converts 'djm' to 'd.*j.*m'
-    regex = re.compile(pattern)  # Compiles a regex.
+    user_input = keyword
+    pattern = '.*'.join(keyword)
+    regex = re.compile(pattern)
     for item in collection:
-        match = regex.search(item)  # Checks if the current item matches the regex.
+        match = regex.search(item)
         if match:
             suggestions.append(item)
     if suggestions:
@@ -222,9 +220,8 @@ def get_time(type = 0):
         return time.strftime('%Y-%m-%d',time.localtime(time.time()))
 
 def adjust_row(data):
-    #print "-------adjust row data----------"
     date = data[0]
-    date = int(date.replace("-",""))#insert(0,int(date.replace("-","")))
+    date = int(date.replace("-",""))
     adjusted_data = []
     adjusted_data.append(date)
 
@@ -245,7 +242,6 @@ def adjust_row(data):
 
         if result_plus!=None:
             term2 = result_plus.group(0)
-            # print "term  "  + term + " term2 " + term2
         adjusted_data.append(StrToDays(term)+StrToDays(term2))
 
     re_price = u"[0-9]{1,2}[.]+[0-9]+"
@@ -260,7 +256,7 @@ def adjust_row(data):
 def StrToDays(term):
     term_in_days = 0
     if ("Y" in term) or ("y" in term):
-        term_in_days = int(float(term[:len(term) - 1]) * 360)
+        term_in_days = int(float(term[:len(term) - 1]) * 365)
     elif ("D" in term) or ("d" in term):
         term_in_days = int(term[:len(term) - 1])
     elif ("M" in term) or ("m" in term):
@@ -314,16 +310,12 @@ class MainWindow(wx.Frame):
         self.agencies =[u"平安信用",u"平安利率",u"BGC信用",u"国际信用",u"国际利率",u"国利信用",u"国利利率",u"信唐"]
         self.term_units=[[u"年",u"月",u"日"],[365,30,1]]
         self.search_column = [[u"简称", u"代码"],["name","bond_id"]]
-        #self.control = wx.TextCtrl(self, style=wx.TE_MULTILINE)
         bkg = wx.Panel(self,style=wx.TAB_TRAVERSAL | wx.CLIP_CHILDREN | wx.FULL_REPAINT_ON_RESIZE)
-        #
-        # ex_button = wx.Button(bkg, label=u"导出excel", pos=(220,20))
-        # ex_button.Bind(wx.EVT_BUTTON, self.OnExport)
 
         getdata_button = wx.Button(bkg, label=u"提取数据", size = (WIDTH,HEIGHT), pos = (ANCHOR+(WIDTH+SPACE)*5.5,ANCHOR))
         getdata_button.Bind(wx.EVT_BUTTON, self.onGetData)
 
-        txt_button = wx.Button(bkg, label = u"导入 txt", size = (WIDTH,HEIGHT), pos=(ANCHOR+(WIDTH+SPACE)*5.5,ANCHOR+(HEIGHT+SPACE)*1))
+        txt_button = wx.Button(bkg, label = u"txt转excel", size = (WIDTH,HEIGHT), pos=(ANCHOR+(WIDTH+SPACE)*5.5,ANCHOR+(HEIGHT+SPACE)*1))
         txt_button.Bind(wx.EVT_BUTTON, self.onImportTxt)
 
         xl_button = wx.Button(bkg, label=u"导入excel", size = (WIDTH,HEIGHT), pos=(ANCHOR+(WIDTH+SPACE)*5.5,ANCHOR+(HEIGHT+SPACE)*2))
@@ -379,7 +371,6 @@ class MainWindow(wx.Frame):
             if dialog.ShowModal() == wx.ID_YES:
                 self.CreateDB()
 
-
     def OnDelData(self,e):
         dialog = wx.MessageDialog(None, u"确定要从数据库删除这条记录？删除之后数据将无法恢复", u"提醒", wx.YES_NO | wx.ICON_QUESTION)
         if dialog.ShowModal() == wx.ID_YES:
@@ -404,7 +395,7 @@ class MainWindow(wx.Frame):
             self.GetData()
 
     def OnDB(self,e):
-        self.DBFrame = wx.Frame(None,title=u"数据库操作", size = (300,300))
+        self.DBFrame = wx.Frame(None,title=u"数据库操作", size = (200,200))
         self.DBFrame.Show()
         p = wx.Panel(self.DBFrame,size =(500,300))
         create_db_btn = wx.Button(p,label=u"新建数据库",pos=(20,20),size=(140,30))
@@ -439,100 +430,10 @@ class MainWindow(wx.Frame):
         else:
             choose_dlg.Destroy()
 
-    def ChooseDefaultDB(self):
-        if self.GetDBs() ==():
-            dialog = wx.MessageDialog(None, u"暂无数据库，请新建至少一个数据库", u"提醒", wx.YES_NO | wx.ICON_QUESTION)
-            if dialog.ShowModal() == wx.ID_YES:
-                if(self.CreateDB()):
-                    self.ChooseDefaultDB()
-        else:
-            choose_dlg = wx.SingleChoiceDialog(None,message=u"请选择默认使用的数据库",caption= u"数据库操作", choices=list(self.GetDBs()))
-            if choose_dlg.ShowModal() == wx.ID_OK:
-                chosen_db = choose_dlg.GetStringSelection()
-                self.SetDefaultDB(chosen_db)
-                self.dbpath = chosen_db
-                choose_dlg.Destroy()
-
-    def CreateDB(self):
-        dialog = wx.TextEntryDialog(None, u"请输入数据库名称(英文)..", "","tr" )
-        if dialog.ShowModal() == wx.ID_OK:
-            dbpath= dialog.GetValue() +".db"
-            if self.AddDB(dbpath):
-                create_table(dbpath)
-
-
-    def DelDB(self, del_db):
-        temp = self.GetDBs()
-        dbs = ()
-        for db in temp:
-            if db != del_db:
-                dbs += (db,)
-        print "Del db " + del_db
-        self.SetDBs(dbs)
-
-    def AddDB(self,add_db):
-        temp = self.GetDBs()
-        if add_db in temp:
-            dlg = wx.MessageDialog(None, u"数据库已存在", u"错误提示", wx.YES_NO | wx.ICON_QUESTION)
-            if dlg.ShowModal() == wx.ID_YES:
-                dlg.Destroy()
-            return False
-        else:
-            dbs = temp + (add_db,)
-            self.SetDBs(dbs)
-            print "Add db " + add_db
-            return True
-
-
-    def GetDBs(self):
-        try:
-            dbs = pickle.load(open('dbs.pkl', 'rb'))
-            print "Get dbs " + str(dbs)
-            return dbs
-        except:
-            return ()
-
-    def SetDefaultDB(self, chosen_db):
-        temp = self.GetDBs()
-        dbs = (chosen_db,)
-        for db in temp:
-            if db!= chosen_db:
-                dbs += (db,)
-        self.SetDBs(dbs)
-        print "Set default db " + chosen_db
-
-    def SetDBs(self,dbs):
-        try:
-            pickle.dump(dbs, open('dbs.pkl', 'wb'))
-            print "Set dbs " + str(dbs)
-        except:
-            print "fail to set dbs"
-
     def onGetData(self,e):
         self.data = select_table(self.dbpath,self.GetFilter())
         print "self.data " + str(self.data)
         self.GetData()
-
-    def GetData(self):
-        export_data = []
-        export_data.append(excel_title)
-        for i in range(len(self.data)):
-            temp = str(self.data[i][0])
-            if (len(temp) == 8):
-                temp = temp[0:4] + "-" + temp[4:6] + "-" + temp[6:8]
-                export_data.append([])
-                export_data[i+1] =[]
-                export_data[i+1].append(temp)
-            for j in range(1,len(self.data[i])):
-                export_data[i+1].append(self.data[i][j])
-        self.export_data = export_data
-        print "self.export_data " + str(self.export_data)
-        #try:
-        if export_data:
-            self.xlsFrame = XLFrame(export_data,self.OnExport,self.OnDelData)
-            self.xlsFrame.Show()
-        #except:
-        #    pass
 
     def OnExport(self,e):
         wildcard = u"Excel 文件(*.xls)|.xls"
@@ -540,7 +441,6 @@ class MainWindow(wx.Frame):
         if dialog.ShowModal() == wx.ID_OK:
             self.xlpath_ex = dialog.GetPath()#.encode('utf-8')
             export_excel(self.export_data,self.xlpath_ex)
-
 
     def onImportTxt(self, e):
         datedlg = wx.TextEntryDialog(None,  u"请输入成交日期","", get_time(1))
@@ -560,7 +460,6 @@ class MainWindow(wx.Frame):
                         self.xlpath = dialog2.GetPath()#.encode('utf-8')
                         import_text(self.txtpath,self.xlpath,date=date)
                         dialog2.Destroy()
-
 
     def onImportExcel(self, e):
         dialog = wx.FileDialog(None, "Choose an excel file...", style=wx.OPEN)
@@ -626,6 +525,94 @@ class MainWindow(wx.Frame):
 
             print self.filter
         return self.filter
+
+    def GetData(self):
+        export_data = []
+        export_data.append(excel_title)
+
+        for i in range(len(self.data)):
+            temp = str(self.data[i][0])
+            if (len(temp) == 8):
+                temp = temp[0:4] + "-" + temp[4:6] + "-" + temp[6:8]
+                export_data.append([])
+                export_data[i + 1] = []
+                export_data[i + 1].append(temp)
+            for j in range(1, len(self.data[i])):
+                export_data[i + 1].append(self.data[i][j])
+        self.export_data = export_data
+        print "self.export_data " + str(self.export_data)
+
+        if export_data:
+            self.xlsFrame = XLFrame(export_data, self.OnExport, self.OnDelData)
+            self.xlsFrame.Show()
+
+    def ChooseDefaultDB(self):
+        if self.GetDBs() ==():
+            dialog = wx.MessageDialog(None, u"暂无数据库，请新建至少一个数据库", u"提醒", wx.YES_NO | wx.ICON_QUESTION)
+            if dialog.ShowModal() == wx.ID_YES:
+                if(self.CreateDB()):
+                    self.ChooseDefaultDB()
+        else:
+            choose_dlg = wx.SingleChoiceDialog(None,message=u"请选择默认使用的数据库",caption= u"数据库操作", choices=list(self.GetDBs()))
+            if choose_dlg.ShowModal() == wx.ID_OK:
+                chosen_db = choose_dlg.GetStringSelection()
+                self.SetDefaultDB(chosen_db)
+                self.dbpath = chosen_db
+                choose_dlg.Destroy()
+
+    def CreateDB(self):
+        dialog = wx.TextEntryDialog(None, u"请输入数据库名称(英文)..", "","tr" )
+        if dialog.ShowModal() == wx.ID_OK:
+            dbpath= dialog.GetValue() +".db"
+            if self.AddDB(dbpath):
+                create_table(dbpath)
+
+    def DelDB(self, del_db):
+        temp = self.GetDBs()
+        dbs = ()
+        for db in temp:
+            if db != del_db:
+                dbs += (db,)
+        print "Del db " + del_db
+        self.SetDBs(dbs)
+
+    def AddDB(self,add_db):
+        temp = self.GetDBs()
+        if add_db in temp:
+            dlg = wx.MessageDialog(None, u"数据库已存在", u"错误提示", wx.YES_NO | wx.ICON_QUESTION)
+            if dlg.ShowModal() == wx.ID_YES:
+                dlg.Destroy()
+            return False
+        else:
+            dbs = temp + (add_db,)
+            self.SetDBs(dbs)
+            print "Add db " + add_db
+            return True
+
+    def GetDBs(self):
+        try:
+            dbs = pickle.load(open('dbs.pkl', 'rb'))
+            print "Get dbs " + str(dbs)
+            return dbs
+        except:
+            return ()
+
+    def SetDefaultDB(self, chosen_db):
+        temp = self.GetDBs()
+        dbs = (chosen_db,)
+        for db in temp:
+            if db!= chosen_db:
+                dbs += (db,)
+        self.SetDBs(dbs)
+        print "Set default db " + chosen_db
+
+    def SetDBs(self,dbs):
+        try:
+            pickle.dump(dbs, open('dbs.pkl', 'wb'))
+            print "Set dbs " + str(dbs)
+        except:
+            print "fail to set dbs"
+
 
 class TreeCtrl(CT.CustomTreeCtrl):
     def __init__(self,parent,id,root,items,pos=wx.DefaultPosition,size=wx.DefaultSize,style=wx.TR_DEFAULT_STYLE):
@@ -722,17 +709,10 @@ class XLFrame(wx.Frame):
         self.currentlySelectedCell = ()
 
     def showPopupMenu(self, e):
-        # if not hasattr(self, "popupID1"):
-        #     self.popupID1 = wx.NewId()
         menu = wx.Menu()
-        # Show how to put an icon in the menu
         item = wx.MenuItem(menu, wx.NewId(), u"从数据库内移除")
-        #item2 = wx.MenuItem(menu, wx.NewId(), "从表内删除")
         menu.AppendItem(item)
-        #menu.AppendItem(item2)
-
         menu.Bind(wx.EVT_MENU,self.menu_func,item)
-        #menu.Bind(wx.EVT_MENU, func1, item)
         self.PopupMenu(menu)
         menu.Destroy()
 
