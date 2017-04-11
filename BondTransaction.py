@@ -9,12 +9,14 @@ import time
 import sqlite3
 import re
 import sys
+import os
 import pickle
 import wx.lib.agw.customtreectrl as CT
 
 reload(sys)
 sys.setdefaultencoding('utf-8')
 excel_title = [u"成交时间",u"期限",u"债券代码",u"债券简称",u"利率",u"信用评级",u"类型",u"中介机构", u"数据库编号"]
+database_title = [u"成交时间",u"期限",u"债券代码",u"债券简称",u"利率",u"信用评级",u"类型",u"中介机构", u"筛选条件-天数", u"筛选条件-价格"]
 
 def import_text(txtpath,xlpath,date):
     print "-------import from txt----------"
@@ -50,14 +52,16 @@ def import_text(txtpath,xlpath,date):
                 row[3]= row[4]
                 row[4]= temp
             temp_row = []
-            temp_row.append(date)
+            temp_row.append(date.replace("-",""))
             for item in row:
                 value = item.strip()
                 temp_row.append(value.decode('gb2312'))
             temp_row.append(bond_type)
             temp_row.append(agency)
             export_data.append(temp_row)
-    export_excel(export_data,xlpath)
+    success_rows, fail_rows = test_insert(export_data)
+    success_rows.insert(0,database_title)
+    export_excel(data =success_rows, data2=fail_rows, xlpath=xlpath)
 
 def import_excel(xlpath, dbpath):
     print "-------import from excel----------"
@@ -66,19 +70,25 @@ def import_excel(xlpath, dbpath):
     nrow = sheet.nrows
     row_list = []
     for i in range(1,nrow):
-        #print sheet.row_values(i)
-        temp =adjust_row(sheet.row_values(i))
+        temp = sheet.row_values(i)
+        row = []
+        for item in temp:
+            if item!="":
+                row.append(item)
         try:
-            row_list.append(tuple(temp))
+            row_list.append(tuple(row))
         except:
             pass
     print row_list
-    fail_collection = insert_table(row_list,dbpath)
-    return fail_collection
+    success_rows, fail_rows = insert_table(row_list,dbpath)
+    return fail_rows
 
 
-def export_excel(data,xlpath):
+def export_excel(data,xlpath, data2 =None):
     print "-------export to excel----------"
+    if len(data) ==0 :
+        return False
+
     workbook = xlwt.Workbook()
     worksheet = workbook.add_sheet('Sheet1')
     badBG = xlwt.Pattern()
@@ -88,15 +98,13 @@ def export_excel(data,xlpath):
     badFontStyle = xlwt.XFStyle()
     badFontStyle.pattern = badBG
 
-    for j in range(len(excel_title)):
-        worksheet.write(0,j,excel_title[j])
-    for i in range(1,len(data)):
-        if len(data[i])!=8:
-            for j in range(len(data[i]),):
-                worksheet.write(i,j,data[i][j],badFontStyle)
-        else:
+    for i in range(0,len(data)):
             for j in range(len(data[i])):
                 worksheet.write(i, j, data[i][j])
+    if data2 !=None:
+        for i in range(0,len(data2)):
+                for j in range(len(data2[i])):
+                    worksheet.write(i+len(data), j, data2[i][j], badFontStyle)
     workbook.save(xlpath)
 
 def create_table(open_path):
@@ -126,22 +134,27 @@ def insert_table(data, open_path):
     conn = sqlite3.connect(open_path)
     cursor = conn.cursor()
     fail_collection = []
+    success_collection = []
     cursor.execute("SELECT MAX(id) FROM TR")
-    i = cursor.fetchone()[0]+1
+    try:
+        i = cursor.fetchone()[0]+1
+    except:
+        i = 1
     print i
     for item in data:
-        temp = (i,) + item
+        temp = (i,) + tuple(item)
         print temp
         try:
             cursor.execute("INSERT INTO TR VALUES(?,?,?,?,?,?,?,?,?,?,?);",temp)
             i+=1
+            success_collection.append(item)
         except:
             print "fail to insert"
             fail_collection.append(item)
 
     conn.commit()
     conn.close()
-    return fail_collection
+    return success_collection, fail_collection
 
 def select_table(open_path,filter_clause= "SELECT date, term_text, bond_id, name, price_text, rating, type, agency,id FROM TR "):
     conn = sqlite3.connect(open_path)
@@ -175,6 +188,20 @@ def search_table(open_path,item, keyword):
 
     conn.close()
     return result
+
+def test_insert(data):
+    test_db = 'test.db'
+    create_table(test_db)
+    row_list = []
+    for row in data[1:]:
+        temp = adjust_row(row)
+        try:
+            row_list.append(tuple(temp))
+        except:
+            pass
+    test_result = insert_table(row_list,test_db)
+    os.remove(test_db)
+    return test_result
 
 def del_row_table(open_path, id):
     print "----------delete data in table----------"
@@ -220,18 +247,13 @@ def get_time(type = 0):
         return time.strftime('%Y-%m-%d',time.localtime(time.time()))
 
 def adjust_row(data):
-    date = data[0]
-    date = int(date.replace("-",""))
     adjusted_data = []
-    adjusted_data.append(date)
-
-    for item in data[1:]:
+    for item in data:#[1:]:
         if item!="":
             adjusted_data.append(item)
     re_term = u"[0-9.]+[DMYdmy]"
     pattern = re.compile(re_term)
     result = re.match(pattern,data[1])
-
     term = ""
     term2 = ""
     if result != None:
@@ -244,7 +266,7 @@ def adjust_row(data):
             term2 = result_plus.group(0)
         adjusted_data.append(StrToDays(term)+StrToDays(term2))
 
-    re_price = u"[0-9]{1,2}[.]+[0-9]+"
+    re_price = u"[0-9]{1,3}[.]+[0-9]+"
     pattern = re.compile(re_price)
     result = re.match(pattern,str(data[4]))
     if result!= None:
@@ -328,7 +350,7 @@ class MainWindow(wx.Frame):
         self.search_text = wx.TextCtrl(bkg,size = (WIDTH,HEIGHT), style= wx.TE_PROCESS_ENTER, pos = (ANCHOR,ANCHOR))
         self.search_text.Bind(wx.EVT_TEXT_ENTER, self.OnSearch)
         search_button.Bind(wx.EVT_BUTTON, self.OnSearch)
-        self.search_column_cb = wx.ComboBox(bkg,choices=self.search_column[0], size=(WIDTH/1.5,HEIGHT),pos =(ANCHOR+WIDTH,ANCHOR))
+        self.search_column_cb = wx.ComboBox(bkg,choices=self.search_column[0], size=(WIDTH/1.5,HEIGHT),pos =(ANCHOR+WIDTH,ANCHOR),value= self.search_column[0][0])
 
 
         self.BondTypeTree = TreeCtrl(parent =bkg,id = wx.NewId(), pos=(ANCHOR,ANCHOR+(HEIGHT+SPACE)*4),
@@ -468,10 +490,14 @@ class MainWindow(wx.Frame):
             self.dbpath = self.GetDBs()[0]
             fail_collection = import_excel(xlpath= self.xlpath,dbpath=self.dbpath)
             dialog.Destroy()
-            print fail_collection
             if fail_collection:
-                fail_xlsFrame = XLFrame(fail_collection, title=u"导入失败的数据")
+                fail_collection.insert(0,database_title)
+                self.export_data = fail_collection
+                fail_xlsFrame = XLFrame(fail_collection, title=u"导入失败的数据", export_func=self.OnExport)
                 fail_xlsFrame.Show()
+            else:
+                dialog = wx.MessageDialog(None, u"数据已经全部成功导入数据库",  u"提醒", wx.YES_NO)
+                dialog.ShowModal()
 
     def GetFilter(self):
         max_price = self.MaxPriceText.GetValue()
@@ -560,6 +586,7 @@ class MainWindow(wx.Frame):
                 self.dbpath = chosen_db
                 choose_dlg.Destroy()
 
+
     def CreateDB(self):
         dialog = wx.TextEntryDialog(None, u"请输入数据库名称(英文)..", "","tr" )
         if dialog.ShowModal() == wx.ID_OK:
@@ -612,6 +639,7 @@ class MainWindow(wx.Frame):
             print "Set dbs " + str(dbs)
         except:
             print "fail to set dbs"
+
 
 
 class TreeCtrl(CT.CustomTreeCtrl):
