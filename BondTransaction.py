@@ -16,7 +16,7 @@ import wx.lib.agw.customtreectrl as CT
 reload(sys)
 sys.setdefaultencoding('utf-8')
 excel_title = [u"成交时间",u"期限",u"债券代码",u"债券简称",u"利率",u"信用评级",u"类型",u"中介机构", u"数据库编号"]
-database_title = [u"成交时间",u"期限",u"债券代码",u"债券简称",u"利率",u"信用评级",u"类型",u"中介机构", u"筛选条件-天数", u"筛选条件-价格"]
+database_title = [u"成交时间",u"期限",u"债券代码",u"债券简称",u"利率",u"信用评级",u"类型",u"中介机构", u"筛选条件-天数", u"筛选条件-价格",u"筛选条件-评级1",u"筛选条件-评级2"]
 
 def import_text(txtpath,xlpath,date):
     print "-------import from txt----------"
@@ -69,19 +69,19 @@ def import_excel(xlpath, dbpath):
     sheet = book.sheet_by_index(0)
     nrow = sheet.nrows
     row_list = []
+    fail_rows1 = []
     for i in range(1,nrow):
-        temp = sheet.row_values(i)
+        temp = sheet.row_values(i)[0:8]
         row = []
         for item in temp:
-            if item!="":
-                row.append(item)
-        try:
-            row_list.append(tuple(row))
-        except:
-            pass
-    print row_list
-    success_rows, fail_rows = insert_table(row_list,dbpath)
-    return fail_rows
+            # if item!="":
+            row.append(item)
+        if len(row)<8:
+            fail_rows1.append(row)
+        else:
+            row_list.append(tuple(adjust_row(row)))
+    success_rows, fail_rows2 = insert_table(row_list,dbpath)
+    return fail_rows1+fail_rows2
 
 
 def export_excel(data,xlpath, data2 =None):
@@ -118,11 +118,13 @@ def create_table(open_path):
                         bond_id text,
                         name text,
                         price_text char(50),
-                        rating char(50),
+                        rating_text char(50),
                         type char(50),
                         agency char(50),
                         term int,
-                        price real);''')
+                        price real,
+                        rating1 char(50),
+                        rating2 char(50));''')
         conn.commit()
         print "-------create table successfully--------"
     except:
@@ -140,12 +142,10 @@ def insert_table(data, open_path):
         i = cursor.fetchone()[0]+1
     except:
         i = 1
-    print i
     for item in data:
         temp = (i,) + tuple(item)
-        print temp
         try:
-            cursor.execute("INSERT INTO TR VALUES(?,?,?,?,?,?,?,?,?,?,?);",temp)
+            cursor.execute("INSERT INTO TR VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?);",temp)
             i+=1
             success_collection.append(item)
         except:
@@ -156,7 +156,7 @@ def insert_table(data, open_path):
     conn.close()
     return success_collection, fail_collection
 
-def select_table(open_path,filter_clause= "SELECT date, term_text, bond_id, name, price_text, rating, type, agency,id FROM TR "):
+def select_table(open_path,filter_clause= "SELECT date, term_text, bond_id, name, price_text, rating_text, type, agency,id FROM TR "):
     conn = sqlite3.connect(open_path)
     cursor = conn.cursor()
     try:
@@ -168,7 +168,7 @@ def select_table(open_path,filter_clause= "SELECT date, term_text, bond_id, name
 def search_table(open_path,item, keyword):
     conn = sqlite3.connect(open_path)
     cursor = conn.cursor()
-    clause= "SELECT date, term_text, bond_id, name, price_text, rating, type, agency, id  FROM TR WHERE "+item+ " like '%" + keyword +"%'"
+    clause= "SELECT date, term_text, bond_id, name, price_text, rating_text, type, agency, id  FROM TR WHERE "+item+ " like '%" + keyword +"%'"
     print clause
     cursor.execute(clause)#"SELECT name FROM TR WHERE ? like ?", (item,"%" + keyword +"%")
     result = cursor.fetchall()
@@ -183,7 +183,7 @@ def search_table(open_path,item, keyword):
         fuzzy_results = fuzzyFinder(keyword,collection=collection)
         print fuzzy_results
         for item in fuzzy_results:
-            cursor.execute("SELECT date, term_text, bond_id, name, price_text, rating, type, agency, id FROM TR WHERE name=?",(item,))
+            cursor.execute("SELECT date, term_text, bond_id, name, price_text, rating_text, type, agency, id FROM TR WHERE name=?",(item,))
             result.append(cursor.fetchone())
 
     conn.close()
@@ -248,30 +248,71 @@ def get_time(type = 0):
 
 def adjust_row(data):
     adjusted_data = []
-    for item in data:#[1:]:
-        if item!="":
-            adjusted_data.append(item)
-    re_term = u"[0-9.]+[DMYdmy]"
+    date = str(data[0]).replace("-","")
+    adjusted_data.append(date)
+    for item in data[1:]:
+        # if item!="":
+        adjusted_data.append(item)
+    re_term = u"[0-9.]+[DMYdmy]{0,1}"
     pattern = re.compile(re_term)
-    result = re.match(pattern,data[1])
+    result = re.match(pattern,str(data[1]))
     term = ""
     term2 = ""
     if result != None:
         term = result.group(0)
-        re_term_plus = u"[+][0-9.]+[DMYdmy]"
+        re_term_plus = u"[+][0-9.]+[DMYdmy]{1}"
         pattern_plus = re.compile(re_term_plus)
-        result_plus = re.search(pattern_plus,data[1])
+        result_plus = re.search(pattern_plus,str(data[1]))
 
         if result_plus!=None:
             term2 = result_plus.group(0)
+        if term[-1] not in "DMYdmy":
+            term += "Y"
         adjusted_data.append(StrToDays(term)+StrToDays(term2))
 
-    re_price = u"[0-9]{1,3}[.]+[0-9]+"
+    re_price = u"[0-9]{1,2}[.]{0,1}[0-9]{0,1}"
     pattern = re.compile(re_price)
     result = re.match(pattern,str(data[4]))
     if result!= None:
         price = float(result.group(0))
         adjusted_data.append(price)
+    else:
+        re_price = u"[1-9]{1,4}[.]{0,1}[1-9]{0,4}"
+        result = re.search(pattern, str(data[4]))
+        if result != None:
+            price = float(result.group(0))
+            adjusted_data.append(price)
+
+    re_rating = u"[ABC+]+[/]{0,1}[ABC01-]{0,4}"
+    pattern = re.compile(re_rating)
+    result = re.match(pattern,str(data[5]))
+    if result!=None:
+        re_rating1 = u"[ABC]{1,3}[+-]{0,1}"
+        re_rating2 = u"[/][ABC]{1,3}[+-]{0,1}"
+        rating1 = ''
+        rating2 = ''
+
+        result1 = re.match(re.compile(re_rating1),str(data[5]))
+        result2 = re.search(re.compile(re_rating2),str(data[5]))
+        if result1 !=None:
+            rating1 = result1.group(0)
+        if result2 != None:
+            rating2 = result2.group(0).replace("/","")
+        adjusted_data.append(rating1)
+        adjusted_data.append(rating2)
+    elif data[5] == '':
+        adjusted_data.append("0")
+        adjusted_data.append("")
+    else:
+        try:
+           rating1 = int(data[5])
+           print "------------data data data -------------"
+           print  data
+           if rating1 ==0:
+                adjusted_data.append("0")
+                adjusted_data.append("")
+        except:
+            pass
 
     return adjusted_data
 
@@ -287,8 +328,14 @@ def StrToDays(term):
 
 def rating_index(rating):
     rating_list = ["AAA+","AAA","AAA-","AA+","AA","AA-","BBB+","BBB","BBB-","BB+", "BB","BB-","B+","B","B-"]
+    cp_rating_list = ["A-1", "A-2", "A-3"]
+
     if rating in rating_list:
-        return rating_list.index(rating)
+        return float(rating_list.index(rating)+1)
+    elif rating in cp_rating_list:
+        return float(cp_rating_list.index(rating) +101)
+    else:
+        return 0.0
 
 def IsDate(*date):
     re_date = u"^(?:(?!0000)[0-9]{4}-(?:(?:0[1-9]|1[0-2])-(?:0[1-9]|1[0-9]|2[0-8])|(?:0[13-9]|1[0-2])-(?:29|30)|(?:0[13578]|1[02])-31)|(?:[0-9]{2}(?:0[48]|[2468][048]|[13579][26])|(?:0[48]|[2468][048]|[13579][26])00)-02-29)$"
@@ -320,7 +367,7 @@ def IsNumber(*number):
 
 class MainWindow(wx.Frame):
     def __init__(self, parent, title):
-        wx.Frame.__init__(self, parent, title = title,size = (650,300))
+        wx.Frame.__init__(self, parent, title = title,size = (700,300))
         self.gaugeFrame = GaugeFrame()
         ANCHOR = 20
         SPACE = 10
@@ -328,7 +375,7 @@ class MainWindow(wx.Frame):
         HEIGHT = 25
 
         self.bond_types = [u"短融",u"企业债", u"公司债",u"存单",u"中票",u"其他"]
-        self.ratings = ["AAA+", "AAA", "AAA-", "AA+", "AA", "AA-", "BBB+", "BBB", "BBB-", "BB+", "BB", "BB-", "B+", "B","B-"]
+        self.ratings = ["AAA+", "AAA", "AAA-", "AA+", "AA", "AA-","A-1","BBB+", "BBB", "BBB-", "BB+", "BB", "BB-", "B+", "B","B-","A-2"]
         self.agencies =[u"平安信用",u"平安利率",u"BGC信用",u"国际信用",u"国际利率",u"国利信用",u"国利利率",u"信唐"]
         self.term_units=[[u"年",u"月",u"日"],[365,30,1]]
         self.search_column = [[u"简称", u"代码"],["name","bond_id"]]
@@ -354,11 +401,11 @@ class MainWindow(wx.Frame):
 
 
         self.BondTypeTree = TreeCtrl(parent =bkg,id = wx.NewId(), pos=(ANCHOR,ANCHOR+(HEIGHT+SPACE)*4),
-                                     size =(WIDTH*1.8,HEIGHT*3),root=u"全部类型",items=self.bond_types)
+                                     size =(WIDTH*1.8,HEIGHT*4.5),root=u"全部类型",items=self.bond_types)
         self.CRTree = TreeCtrl(parent =bkg,id = wx.NewId(),pos=(ANCHOR+WIDTH*1.9+SPACE,ANCHOR+(HEIGHT+SPACE)*4),
-                                     size =(WIDTH*1.8,HEIGHT*3),root=u"全部评级",items=self.ratings)
+                                     size =(WIDTH*1.8,HEIGHT*4.5),root=u"全部评级",items=self.ratings)
         self.AgencyTree = TreeCtrl(parent =bkg,id = wx.NewId(), pos=(ANCHOR+WIDTH*1.9*2+SPACE*2,ANCHOR+(HEIGHT+SPACE)*4),
-                                     size =(WIDTH*1.8,HEIGHT*3),root=u"全部中介",items=self.agencies)
+                                     size =(WIDTH*1.8,HEIGHT*4.5),root=u"全部中介",items=self.agencies)
         self.label1 = wx.StaticText(bkg, -1, u"开始时间", pos=(ANCHOR, 60))
         self.label2 = wx.StaticText(bkg, -1, u"结束时间", pos=(260, 60))
         self.label3 = wx.StaticText(bkg, -1, u"最低利率", pos=(ANCHOR, 90))
@@ -518,7 +565,7 @@ class MainWindow(wx.Frame):
 
 
         if IsDate(start_date,end_date) and IsNumber(min_term,max_term):
-            self.filter = " SELECT date, term_text, bond_id, name, price_text, rating, type, agency,id FROM TR WHERE (" + max_price + " >= price) AND (price >= " + min_price + ")"
+            self.filter = " SELECT date, term_text, bond_id, name, price_text, rating_text, type, agency,id FROM TR WHERE (" + max_price + " >= price) AND (price >= " + min_price + ")"
             self.filter += " AND (" + end_date.replace("-", "") + " >= date) AND( date >= " + start_date.replace("-", "") + ")"
             self.filter += "AND (" + str(int(float(max_term) * float(max_unit))) + ">= term) AND ( term>= " + str(int(float(min_term)*float(min_unit))) +")"
 
@@ -534,7 +581,8 @@ class MainWindow(wx.Frame):
             if (ratings != self.ratings) and (len(ratings)!=0):
                 self.filter += " AND ( "
                 for rating in ratings:
-                    self.filter += " ( rating = '" + str(rating) + "' ) "
+                    self.filter += " ( rating1 = '" + str(rating) + "' ) OR "
+                    self.filter += " ( rating2 = '" + str(rating) + "' ) "
                     if rating!= ratings[-1]:
                         self.filter +=  " OR "
                     else:
@@ -600,6 +648,7 @@ class MainWindow(wx.Frame):
         for db in temp:
             if db != del_db:
                 dbs += (db,)
+        os.remove(del_db)
         print "Del db " + del_db
         self.SetDBs(dbs)
 
