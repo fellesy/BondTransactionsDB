@@ -74,20 +74,24 @@ def import_excel(xlpath, conn):
     fail_rows1 = []
 
     for i in range(1,nrow):
-        row = sheet.row_values(i)
+        temp = sheet.row_values(i)
+        row = []
         #判断格式是否正确，如果满足条件，对数据进行调整然后导入云端数据库
+        for item in temp:
+            if item !="" or item ==" ":
+                row.append(item)
+        print len(row)
+        print row
         if (len(row) <8):
             fail_rows1.append(row)
-        elif len(row)>8:
-            if not IsNumber(row[8]):
-                fail_rows1.append(row)
+        elif (len(row)>12):
+            fail_rows1.append(row)
         else:
-            row = tuple(adjust_row(row[0:8]))
-            if len(row)==12:
-                row_list.append(row)
+            row = adjust_row(row[0:8])
+            if row[-1]=="error":
+                fail_rows1.append(tuple(row))
             else:
-                fail_rows1.append(row)
-
+                row_list.append(tuple(row))
 
     success_rows, fail_rows2 = insert_table(data=row_list,conn=conn)
 
@@ -111,11 +115,14 @@ def export_excel(data,xlpath, wrong_data =None):
 
     for i in range(0,len(data)):
             for j in range(len(data[i])):
-                worksheet.write(i, j, data[i][j])
+
+                worksheet.write(i, j, str(data[i][j]).decode('utf-8'))
     if wrong_data !=None:
         for i in range(0,len(wrong_data)):
                 for j in range(len(wrong_data[i])):
-                    worksheet.write(i+len(data), j, wrong_data[i][j], badFontStyle)
+                    worksheet.write(i+len(data), j, str(wrong_data[i][j]).decode('utf-8'), badFontStyle)
+    print "-----------xlpath-------------"
+    print xlpath
     workbook.save(xlpath)
 
 def create_table(conn, name ):
@@ -343,14 +350,14 @@ def get_tables(conn):
 
 def test_insert(data):
     test_db = 'test.db'
-    create_local_table(test_db)
+    try:
+        create_local_table(test_db)
+    except Exception as err:
+        print err
     row_list = []
     for row in data[1:]:
         temp = adjust_row(row)
-        try:
-            row_list.append(tuple(temp))
-        except:
-            pass
+        row_list.append(tuple(temp))
     test_result = insert_local_table(dbpath=test_db, data =row_list)
     os.remove(test_db)
     return test_result
@@ -395,6 +402,7 @@ def get_time(type = 0):
 
 def adjust_row(data):
     adjusted_data = []
+
     date = str(data[0]).replace("-","")
     adjusted_data.append(date)
     for item in data[1:]:
@@ -402,41 +410,41 @@ def adjust_row(data):
         adjusted_data.append(item)
     re_term = u"[0-9.]+[DMYdmy]{0,1}"
     pattern = re.compile(re_term)
-    result = re.match(pattern,str(data[1]))
+    term_result = re.match(pattern,str(data[1]))
     term = ""
     term2 = ""
-    if result != None:
-        term = result.group(0)
-        re_term_plus = u"[+][0-9.]+[DMYdmy]{1}"
-        pattern_plus = re.compile(re_term_plus)
-        result_plus = re.search(pattern_plus,str(data[1]))
+    if term_result != None:
+        term = term_result.group(0)
+        re_term2 = u"[+][0-9.]+[DMYdmy]{1}"
+        pattern2 = re.compile(re_term2)
+        term_result2 = re.search(pattern2,str(data[1]))
 
-        if result_plus!=None:
-            term2 = result_plus.group(0)
+        if term_result2!=None:
+            term2 = term_result2.group(0)
         if term[-1] not in "DMYdmy":
             term += "Y"
         adjusted_data.append(StrToDays(term)+StrToDays(term2))
 
     re_price = u"[0-9]{1,2}[.]{0,1}[0-9]{0,4}"
     pattern = re.compile(re_price)
-    result = re.match(pattern,str(data[4]))
-    if result!= None:
-        price = float(result.group(0))
+    price_result = re.match(pattern,str(data[4]))
+    if price_result!= None:
+        price = float(price_result.group(0))
         adjusted_data.append(price)
     else:
         re_price = u"[1-9]{1,4}[.]{0,1}[1-9]{0,4}"
         pattern = re.compile(re_price)
-        result = re.search(pattern, str(data[4]))
-        if result != None:
-            price = float(result.group(0))
+        price_result = re.search(pattern, str(data[4]))
+        if price_result != None:
+            price = float(price_result.group(0))
             adjusted_data.append(price)
 
     rating1 = "0"
     rating2 = "0"
     re_rating = u"[ABC+]+[/]{0,1}[ABC01-]{0,4}"
     pattern = re.compile(re_rating)
-    result = re.match(pattern,str(data[5]))
-    if result!=None:
+    rating_result = re.match(pattern,str(data[5]))
+    if rating_result!=None:
         re_rating1 = u"[ABC]{1,3}[+-]{0,1}"
         re_rating2 = u"[/][ABC]{1,3}[+-]{0,1}[1,3]{0,1}"
 
@@ -464,6 +472,9 @@ def adjust_row(data):
                 adjusted_data.append("0")
         except:
             pass
+
+    if not (price_result) or (not rating_result) or (not term_result) or (len(adjusted_data)>12):
+        adjusted_data.append("error")
 
     return adjusted_data
 
@@ -550,13 +561,13 @@ class MainWindow(wx.Frame):
         self.search_column = [[u"简称", u"代码"],["name","bond_id"]]
         bkg = wx.Panel(self,style=wx.TAB_TRAVERSAL | wx.CLIP_CHILDREN | wx.FULL_REPAINT_ON_RESIZE)
 
-        getdata_button = wx.Button(bkg, label=u"提取数据", size = (WIDTH,HEIGHT), pos = (ANCHOR+(WIDTH+SPACE)*5.3,ANCHOR))
+        getdata_button = wx.Button(bkg, label=u"提取数据", size = (WIDTH,HEIGHT), pos = (ANCHOR+(WIDTH+SPACE)*6.2,ANCHOR))
         getdata_button.Bind(wx.EVT_BUTTON, self.onGetData)
 
-        txt_button = wx.Button(bkg, label = u"txt转excel", size = (WIDTH,HEIGHT), pos=(ANCHOR+(WIDTH+SPACE)*5.3,ANCHOR+(HEIGHT+SPACE)*1))
+        txt_button = wx.Button(bkg, label = u"txt转excel", size = (WIDTH,HEIGHT), pos=(ANCHOR+(WIDTH+SPACE)*6.2,ANCHOR+(HEIGHT+SPACE)*1))
         txt_button.Bind(wx.EVT_BUTTON, self.OnImportTxt)
 
-        xl_button = wx.Button(bkg, label=u"导入excel", size = (WIDTH,HEIGHT), pos=(ANCHOR+(WIDTH+SPACE)*5.3,ANCHOR+(HEIGHT+SPACE)*2))
+        xl_button  = wx.Button(bkg, label = u"导入excel",    size = (WIDTH,HEIGHT), pos=(ANCHOR+(WIDTH+SPACE)*6.2,ANCHOR+(HEIGHT+SPACE)*2))
         xl_button.Bind(wx.EVT_BUTTON, self.OnImportExcel)
 
         # db_button = wx.Button(bkg,label = u"数据库操作",size = (WIDTH,HEIGHT), pos =(ANCHOR+(WIDTH+SPACE)*5.5,ANCHOR+(HEIGHT+SPACE)*3))
@@ -973,8 +984,7 @@ class TreeCtrl(CT.CustomTreeCtrl):
             else:
                 for item in self.get_tree_children(self.root):
                     self.CheckItem(item,False)
-                for item in self.checked_items:
-                    self.checked_items.remove(item)
+                self.checked_items =[]
         else:
             if self.IsItemChecked(checked_item):
                 self.checked_items.append(self.GetItemText(checked_item))
@@ -988,7 +998,6 @@ class TreeCtrl(CT.CustomTreeCtrl):
                         self.CheckItem(item, True)
                     self.CheckItem(checked_item,False)
                 # print "remove"
-        # print self.checked_items
 
     def get_tree_children(self,item_obj):
         item_list = []
