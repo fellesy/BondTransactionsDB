@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-# mypath should be the complete path for the directory containing the input text files
 
 import xlwt
 import xlrd
@@ -10,13 +9,15 @@ import sqlite3
 import re
 import sys
 import os
-import pickle
 import wx.lib.agw.customtreectrl as CT
+from datetime import datetime
+import MySQLdb
 
 reload(sys)
 sys.setdefaultencoding('utf-8')
 excel_title = [u"成交时间",u"期限",u"债券代码",u"债券简称",u"利率",u"信用评级",u"类型",u"中介机构", u"数据库编号"]
 database_title = [u"成交时间",u"期限",u"债券代码",u"债券简称",u"利率",u"信用评级",u"类型",u"中介机构", u"筛选条件-天数", u"筛选条件-价格",u"筛选条件-评级1",u"筛选条件-评级2"]
+select_columns = "date, term_text, bond_id, name, price_text, rating_text, type, agency, id"
 
 def import_text(txtpath,xlpath,date):
     print "-------import from txt----------"
@@ -61,30 +62,39 @@ def import_text(txtpath,xlpath,date):
             export_data.append(temp_row)
     success_rows, fail_rows = test_insert(export_data)
     success_rows.insert(0,database_title)
-    export_excel(data =success_rows, data2=fail_rows, xlpath=xlpath)
+    export_excel(data =success_rows, wrong_data=fail_rows, xlpath=xlpath)
 
-def import_excel(xlpath, dbpath):
+
+def import_excel(xlpath, conn):
     print "-------import from excel----------"
     book = xlrd.open_workbook(xlpath)
     sheet = book.sheet_by_index(0)
     nrow = sheet.nrows
     row_list = []
     fail_rows1 = []
+
     for i in range(1,nrow):
-        temp = sheet.row_values(i)[0:8]
-        row = []
-        for item in temp:
-            # if item!="":
-            row.append(item)
-        if len(row)<8:
+        row = sheet.row_values(i)
+        #判断格式是否正确，如果满足条件，对数据进行调整然后导入云端数据库
+        if (len(row) <8):
             fail_rows1.append(row)
+        elif len(row)>8:
+            if not IsNumber(row[8]):
+                fail_rows1.append(row)
         else:
-            row_list.append(tuple(adjust_row(row)))
-    success_rows, fail_rows2 = insert_table(row_list,dbpath)
+            row = tuple(adjust_row(row[0:8]))
+            if len(row)==12:
+                row_list.append(row)
+            else:
+                fail_rows1.append(row)
+
+
+    success_rows, fail_rows2 = insert_table(data=row_list,conn=conn)
+
     return fail_rows1+fail_rows2
 
 
-def export_excel(data,xlpath, data2 =None):
+def export_excel(data,xlpath, wrong_data =None):
     print "-------export to excel----------"
     if len(data) ==0 :
         return False
@@ -98,20 +108,20 @@ def export_excel(data,xlpath, data2 =None):
     badFontStyle = xlwt.XFStyle()
     badFontStyle.pattern = badBG
 
+
     for i in range(0,len(data)):
             for j in range(len(data[i])):
                 worksheet.write(i, j, data[i][j])
-    if data2 !=None:
-        for i in range(0,len(data2)):
-                for j in range(len(data2[i])):
-                    worksheet.write(i+len(data), j, data2[i][j], badFontStyle)
+    if wrong_data !=None:
+        for i in range(0,len(wrong_data)):
+                for j in range(len(wrong_data[i])):
+                    worksheet.write(i+len(data), j, wrong_data[i][j], badFontStyle)
     workbook.save(xlpath)
 
-def create_table(open_path):
-    conn = sqlite3.connect(open_path)
+def create_table(conn, name ):
     cursor = conn.cursor()
-    try:
-        cursor.execute('''CREATE TABLE TR (
+    print "table name " + name
+    cursor.execute('''CREATE TABLE %s (
                         id INTEGER PRIMARY KEY ,
                         date long,
                         term_text text,
@@ -123,75 +133,217 @@ def create_table(open_path):
                         agency char(50),
                         term int,
                         price real,
-                        rating1 char(50),
-                        rating2 char(50));''')
-        conn.commit()
-        print "-------create table successfully--------"
-    except:
-        print "fail to create table"
-    conn.close()
+                        company_rating char(50),
+                        bond_rating char(50));'''%(name))
+    conn.commit()
+    print "-------create table successfully--------"
+    cursor.close()
+    return True
 
-def insert_table(data, open_path):
-    print "------insert_table------"
-    conn = sqlite3.connect(open_path)
+def create_local_table(dbpath):
+    #在本地创建sqlite3的数据库，主要用以测试数据是否能够导入数据库
+    conn = sqlite3.connect(dbpath)
     cursor = conn.cursor()
+    cursor.execute('''CREATE TABLE TR (
+                        id INTEGER PRIMARY KEY ,
+                        date long,
+                        term_text text,
+                        bond_id text,
+                        name text,
+                        price_text char(50),
+                        rating_text char(50),
+                        type char(50),
+                        agency char(50),
+                        term int,
+                        price real,
+                        company_rating char(50),
+                        bond_rating char(50));''')
+    conn.commit()
+    print "-------create local table successfully--------"
+    cursor.close()
+    return True
+
+def insert_table(conn,data):
+    print "------insert_table------"
+
+
     fail_collection = []
     success_collection = []
-    cursor.execute("SELECT MAX(id) FROM TR")
-    try:
-        i = cursor.fetchone()[0]+1
-    except:
-        i = 1
+
+    temp =""
+    for item in data:
+        date = item[0][0:6]
+        if temp!=date:
+            temp = date
+            if not IsTableExist(conn,"tr%s"%temp):
+                if not create_table(conn,"tr%s"%temp):
+                    continue
+
+    cursor = conn.cursor()
+    for item in data:
+        date = item[0][0:6]
+        table = "tr" +date
+        cursor.execute("SELECT MAX(id) FROM %s "%table)
+
+
+        max_id = cursor.fetchone()[0]
+        if max_id ==None:
+            i = 1
+        else:
+            i = max_id + 1
+
+        temp = (i,) + tuple(item)
+        print temp
+
+        try:
+            cursor.execute("INSERT INTO "+table+" VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s);", temp)
+            i += 1
+            success_collection.append(item)
+        except Exception as err:
+            print("Something went wrong: {}".format(err))
+            print "fail to insert"
+            fail_collection.append(item)
+
+    conn.commit()
+    cursor.close()
+    return success_collection, fail_collection
+
+def insert_local_table(dbpath,data):
+    print "------insert_table------"
+    conn = sqlite3.connect(dbpath)
+    cursor = conn.cursor()
+
+    fail_collection = []
+    success_collection = []
+    i=1
+
     for item in data:
         temp = (i,) + tuple(item)
+        print temp
         try:
-            cursor.execute("INSERT INTO TR VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?);",temp)
-            i+=1
+            cursor.execute("INSERT INTO TR VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?);", temp)
+            i += 1
             success_collection.append(item)
         except:
             print "fail to insert"
             fail_collection.append(item)
 
     conn.commit()
-    conn.close()
+    cursor.close()
     return success_collection, fail_collection
 
-def select_table(open_path,filter_clause= "SELECT date, term_text, bond_id, name, price_text, rating_text, type, agency,id FROM TR "):
-    conn = sqlite3.connect(open_path)
+def IsTableExist(conn,table):
+    cursor = conn.cursor()
+    tables = []
+
+    print "get names of tables"
+    try:
+        cursor.execute("SHOW TABLES")  # Select Name from sqlite_master where type ='table' order by name")
+        result = cursor.fetchall()
+        tables.extend(x[0] for x in result)
+    except Exception as err:
+        print("Something went wrong: {}".format(err))
+
+    cursor.close()
+
+    if not tables:
+        print table + " not exists "
+        return False
+
+    if table in tables:
+        print table + " exists "
+        return True
+    else:
+        print table + " not exists "
+        return False
+
+def drop_table(conn,table):
+    cursor = conn.cursor()
+    cursor.execute("DROP TABLE " + table )
+    conn.commit()
+    cursor.close()
+
+def select_table(conn,filter_clause):
     cursor = conn.cursor()
     try:
         cursor.execute(filter_clause)
-        return cursor.fetchall()
+        result = cursor.fetchall()
+        cursor.close()
+        return result
     except:
+        cursor.close()
         return []
 
-def search_table(open_path,item, keyword):
-    conn = sqlite3.connect(open_path)
+def search_table(conn,item, keyword, table, filter=""):
     cursor = conn.cursor()
-    clause= "SELECT date, term_text, bond_id, name, price_text, rating_text, type, agency, id  FROM TR WHERE "+item+ " like '%" + keyword +"%'"
-    print clause
-    cursor.execute(clause)#"SELECT name FROM TR WHERE ? like ?", (item,"%" + keyword +"%")
-    result = cursor.fetchall()
-    print "first shot of search "+ str(result)
+    if keyword:
+        if filter:
+            clause = "SELECT "+select_columns+" FROM " \
+                + table+ " WHERE (" + item + " like '%"+keyword+"%') AND ("+filter +")"
+        else:
+            clause = "SELECT "+select_columns+" FROM " \
+                + table+ " WHERE (" + item + " like '%"+keyword+"%')"
+        print clause
 
-    if (len(result) == 0) and (item =="name"):
-        cursor.execute("SELECT name FROM TR")
-        collection = []
-        names = cursor.fetchall()
-        for name in names:
-            collection.append(name[0])
-        fuzzy_results = fuzzyFinder(keyword,collection=collection)
-        print fuzzy_results
-        for item in fuzzy_results:
-            cursor.execute("SELECT date, term_text, bond_id, name, price_text, rating_text, type, agency, id FROM TR WHERE name=?",(item,))
-            result.append(cursor.fetchone())
+        cursor.execute(clause)
+        result = cursor.fetchall()
+        print "first shot of search "+ str(result)
 
-    conn.close()
+        if (len(result) == 0) and (item =="name"):
+            if filter:
+                clause = "SELECT name FROM  %s Where %s order by date desc"%(table,filter)
+            else:
+                clause = "SELECT name FROM %s order by date desc"%(table)
+            cursor.execute(clause)
+            collection = []
+            result =[]
+
+            names = cursor.fetchall()
+            for name in names:
+                collection.append(name[0].decode('utf-8'))
+            fuzzy_results = fuzzyFinder(keyword,collection=collection)
+            print "second shot of search: "+ str( fuzzy_results)
+
+            for fuzzy_result in fuzzy_results:
+                clause ="SELECT %s FROM %s WHERE ( name='%s' ) %s order by date desc"\
+                        %(select_columns,table,fuzzy_result," AND %s"%filter)
+                print clause
+                cursor.execute(clause)
+                result.append(cursor.fetchone())
+        cursor.close()
+    else:
+        if filter:
+
+            clause = "SELECT %s from %s Where %s order by date desc"%(select_columns,table, filter)
+        else:
+            clause = "SELECT %s from %s order by date desc"%(select_columns,table)
+
+        print clause
+
+        cursor.execute(clause)
+        result = cursor.fetchall()
     return result
+
+
+def get_tables(conn):
+    cursor = conn.cursor()
+    tables = []
+    try:
+        cursor.execute("SHOW TABLES")
+        print "## get names of tables ##"
+        result = cursor.fetchall()
+        print result
+        tables.extend(x[0] for x in result)
+        cursor.close()
+        tables.sort(reverse=True)
+        return tables
+    except Exception as err:
+        print("Something went wrong: {}".format(err))
+        return []
 
 def test_insert(data):
     test_db = 'test.db'
-    create_table(test_db)
+    create_local_table(test_db)
     row_list = []
     for row in data[1:]:
         temp = adjust_row(row)
@@ -199,27 +351,22 @@ def test_insert(data):
             row_list.append(tuple(temp))
         except:
             pass
-    test_result = insert_table(row_list,test_db)
+    test_result = insert_local_table(dbpath=test_db, data =row_list)
     os.remove(test_db)
     return test_result
 
-def del_row_table(open_path, id):
+def del_row_table(conn, id,table):
     print "----------delete data in table----------"
-    conn = sqlite3.connect(open_path)
     cursor = conn.cursor()
-    cursor.execute("DELETE FROM TR WHERE ID = ?", (id,))
+    print table
+    cursor.execute("DELETE FROM %s WHERE ID = %s"%(table, str(id)))
     conn.commit()
-    conn.close()
-    conn = sqlite3.connect(open_path)
-    cursor = conn.cursor()
-    cursor.execute("SELECT id, date, name FROM TR WHERE (id > ?) AND(id< ?)",(int(id)-3,int(id)+3))
-    print cursor.fetchall()
-
+    cursor.close()
+    return True
 
 
 def fuzzyFinder(keyword,collection):
     suggestions =[]
-    user_input = keyword
     pattern = '.*'.join(keyword)
     regex = re.compile(pattern)
     for item in collection:
@@ -230,7 +377,7 @@ def fuzzyFinder(keyword,collection):
         return suggestions
     else:
         print " no perfect match. Find similar results"
-        pattern = '[' + keyword +']+'
+        pattern = '[%s]+'%keyword
         regex = re.compile(pattern)
         for item in collection:
             match = regex.search(item)
@@ -270,7 +417,7 @@ def adjust_row(data):
             term += "Y"
         adjusted_data.append(StrToDays(term)+StrToDays(term2))
 
-    re_price = u"[0-9]{1,2}[.]{0,1}[0-9]{0,1}"
+    re_price = u"[0-9]{1,2}[.]{0,1}[0-9]{0,4}"
     pattern = re.compile(re_price)
     result = re.match(pattern,str(data[4]))
     if result!= None:
@@ -278,39 +425,43 @@ def adjust_row(data):
         adjusted_data.append(price)
     else:
         re_price = u"[1-9]{1,4}[.]{0,1}[1-9]{0,4}"
+        pattern = re.compile(re_price)
         result = re.search(pattern, str(data[4]))
         if result != None:
             price = float(result.group(0))
             adjusted_data.append(price)
 
+    rating1 = "0"
+    rating2 = "0"
     re_rating = u"[ABC+]+[/]{0,1}[ABC01-]{0,4}"
     pattern = re.compile(re_rating)
     result = re.match(pattern,str(data[5]))
     if result!=None:
         re_rating1 = u"[ABC]{1,3}[+-]{0,1}"
-        re_rating2 = u"[/][ABC]{1,3}[+-]{0,1}"
-        rating1 = ''
-        rating2 = ''
+        re_rating2 = u"[/][ABC]{1,3}[+-]{0,1}[1,3]{0,1}"
 
         result1 = re.match(re.compile(re_rating1),str(data[5]))
         result2 = re.search(re.compile(re_rating2),str(data[5]))
         if result1 !=None:
             rating1 = result1.group(0)
+        else:
+            rating1 = "0"
         if result2 != None:
             rating2 = result2.group(0).replace("/","")
+        # else:
+        #     rating2 = rating1
         adjusted_data.append(rating1)
         adjusted_data.append(rating2)
+
     elif data[5] == '':
         adjusted_data.append("0")
-        adjusted_data.append("")
+        adjusted_data.append("0")
     else:
         try:
            rating1 = int(data[5])
-           print "------------data data data -------------"
-           print  data
            if rating1 ==0:
                 adjusted_data.append("0")
-                adjusted_data.append("")
+                adjusted_data.append("0")
         except:
             pass
 
@@ -348,7 +499,7 @@ def IsDate(*date):
     if len(results) == len(date):
         return True
     else:
-        dlg = wx.MessageDialog(None, u"日期格式错误", u"错误提示", wx.YES_NO | wx.ICON_QUESTION)
+        dlg = wx.MessageDialog(None, u"日期格式错误", u"错误提示", wx.ICON_QUESTION)
         if dlg.ShowModal() == wx.ID_YES:
             dlg.Destroy()
         return False
@@ -359,14 +510,31 @@ def IsNumber(*number):
             float(item)
         return True
     except:
-        dlg = wx.MessageDialog(None, u"数字错误", u"错误提示", wx.YES_NO | wx.ICON_QUESTION)
-        if dlg.ShowModal() == wx.ID_YES:
-            dlg.Destroy()
         return False
+
+def monthdelta(date1,date2):
+    years = date2.year - date1.year
+    months = []
+    month_format = lambda x:"0"+str(x) if x<10 else str(x)
+
+    if years ==0:
+        months.extend(str(date1.year) + month_format(x) for x in range(date1.month, date2.month+1))
+        return months
+    else:
+        months.extend(str(date1.year)+month_format(x) for x in range(date1.month,13))
+        for year in range(date1.year+1,date2.year):
+            months.extend(str(year)+month_format(x) for x in range(1,13))
+
+        months.extend(str(date2.year)+month_format(x) for x in range(1,date2.month+1))
+        return months
 
 
 class MainWindow(wx.Frame):
     def __init__(self, parent, title):
+        self.connection = self.Connect_MySQL()
+        if not self.connection:
+            sys.exit(0)
+
         wx.Frame.__init__(self, parent, title = title,size = (700,300))
         self.gaugeFrame = GaugeFrame()
         ANCHOR = 20
@@ -375,37 +543,49 @@ class MainWindow(wx.Frame):
         HEIGHT = 25
 
         self.bond_types = [u"短融",u"企业债", u"公司债",u"存单",u"中票",u"其他"]
-        self.ratings = ["AAA+", "AAA", "AAA-", "AA+", "AA", "AA-","A-1","BBB+", "BBB", "BBB-", "BB+", "BB", "BB-", "B+", "B","B-","A-2"]
-        self.agencies =[u"平安信用",u"平安利率",u"BGC信用",u"国际信用",u"国际利率",u"国利信用",u"国利利率",u"信唐"]
+        self.company_ratings = ["AAA+", "AAA", "AAA-", "AA+", "AA", "AA-","A+", "A", "A-","BBB+", "BBB", "BBB-", "BB+", "BB", "BB-", "B+", "B","B-","0"]
+        self.bond_ratings = ["AAA+", "AAA", "AAA-", "AA+", "AA", "AA-","A-1","A+", "A", "A-","BBB+", "BBB", "BBB-", "BB+", "BB", "BB-", "B+", "B","B-","A-2","0"]
+        self.agencies =[u"平安",u"BGC",u"国际",u"国利",u"信唐",u"空缺"]
         self.term_units=[[u"年",u"月",u"日"],[365,30,1]]
         self.search_column = [[u"简称", u"代码"],["name","bond_id"]]
         bkg = wx.Panel(self,style=wx.TAB_TRAVERSAL | wx.CLIP_CHILDREN | wx.FULL_REPAINT_ON_RESIZE)
 
-        getdata_button = wx.Button(bkg, label=u"提取数据", size = (WIDTH,HEIGHT), pos = (ANCHOR+(WIDTH+SPACE)*5.5,ANCHOR))
+        getdata_button = wx.Button(bkg, label=u"提取数据", size = (WIDTH,HEIGHT), pos = (ANCHOR+(WIDTH+SPACE)*5.3,ANCHOR))
         getdata_button.Bind(wx.EVT_BUTTON, self.onGetData)
 
-        txt_button = wx.Button(bkg, label = u"txt转excel", size = (WIDTH,HEIGHT), pos=(ANCHOR+(WIDTH+SPACE)*5.5,ANCHOR+(HEIGHT+SPACE)*1))
-        txt_button.Bind(wx.EVT_BUTTON, self.onImportTxt)
+        txt_button = wx.Button(bkg, label = u"txt转excel", size = (WIDTH,HEIGHT), pos=(ANCHOR+(WIDTH+SPACE)*5.3,ANCHOR+(HEIGHT+SPACE)*1))
+        txt_button.Bind(wx.EVT_BUTTON, self.OnImportTxt)
 
-        xl_button = wx.Button(bkg, label=u"导入excel", size = (WIDTH,HEIGHT), pos=(ANCHOR+(WIDTH+SPACE)*5.5,ANCHOR+(HEIGHT+SPACE)*2))
-        xl_button.Bind(wx.EVT_BUTTON, self.onImportExcel)
+        xl_button = wx.Button(bkg, label=u"导入excel", size = (WIDTH,HEIGHT), pos=(ANCHOR+(WIDTH+SPACE)*5.3,ANCHOR+(HEIGHT+SPACE)*2))
+        xl_button.Bind(wx.EVT_BUTTON, self.OnImportExcel)
 
-        db_button = wx.Button(bkg,label = u"数据库操作",size = (WIDTH,HEIGHT), pos =(ANCHOR+(WIDTH+SPACE)*5.5,ANCHOR+(HEIGHT+SPACE)*3))
-        db_button.Bind(wx.EVT_BUTTON,self.OnDB)
+        # db_button = wx.Button(bkg,label = u"数据库操作",size = (WIDTH,HEIGHT), pos =(ANCHOR+(WIDTH+SPACE)*5.5,ANCHOR+(HEIGHT+SPACE)*3))
+        # db_button.Bind(wx.EVT_BUTTON,self.OnDB)
 
         search_button = wx.Button(bkg, label=u"搜索",size=(WIDTH*0.8,HEIGHT), pos = (ANCHOR+WIDTH+WIDTH/1.5,ANCHOR))
         self.search_text = wx.TextCtrl(bkg,size = (WIDTH,HEIGHT), style= wx.TE_PROCESS_ENTER, pos = (ANCHOR,ANCHOR))
         self.search_text.Bind(wx.EVT_TEXT_ENTER, self.OnSearch)
         search_button.Bind(wx.EVT_BUTTON, self.OnSearch)
         self.search_column_cb = wx.ComboBox(bkg,choices=self.search_column[0], size=(WIDTH/1.5,HEIGHT),pos =(ANCHOR+WIDTH,ANCHOR),value= self.search_column[0][0])
-
+        self.advance_search_cb = wx.CheckBox(bkg,-1,u"高级搜索",pos=(ANCHOR+WIDTH*2.5+SPACE,ANCHOR))
+        self.advance_search_cb.SetValue(True)
 
         self.BondTypeTree = TreeCtrl(parent =bkg,id = wx.NewId(), pos=(ANCHOR,ANCHOR+(HEIGHT+SPACE)*4),
-                                     size =(WIDTH*1.8,HEIGHT*4.5),root=u"全部类型",items=self.bond_types)
-        self.CRTree = TreeCtrl(parent =bkg,id = wx.NewId(),pos=(ANCHOR+WIDTH*1.9+SPACE,ANCHOR+(HEIGHT+SPACE)*4),
-                                     size =(WIDTH*1.8,HEIGHT*4.5),root=u"全部评级",items=self.ratings)
-        self.AgencyTree = TreeCtrl(parent =bkg,id = wx.NewId(), pos=(ANCHOR+WIDTH*1.9*2+SPACE*2,ANCHOR+(HEIGHT+SPACE)*4),
-                                     size =(WIDTH*1.8,HEIGHT*4.5),root=u"全部中介",items=self.agencies)
+                                     size =(WIDTH*2,HEIGHT*4.5),root=u"全部类型",items=self.bond_types)
+        self.CRCompanyTree = TreeCtrl(parent =bkg,id = wx.NewId(),pos=(ANCHOR+WIDTH*2+SPACE,ANCHOR+(HEIGHT+SPACE)*4),
+                                     size =(WIDTH*2,HEIGHT*4.5),root=u"全部主体评级",items=self.company_ratings)
+        self.CRBondTree = TreeCtrl(parent =bkg,id = wx.NewId(),pos=(ANCHOR+WIDTH*2*2+SPACE*2,ANCHOR+(HEIGHT+SPACE)*4),
+                                     size =(WIDTH*2,HEIGHT*4.5),root=u"全部债券评级",items=self.bond_ratings)
+        self.AgencyTree = TreeCtrl(parent =bkg,id = wx.NewId(), pos=(ANCHOR+WIDTH*2*3+SPACE*3,ANCHOR+(HEIGHT+SPACE)*4),
+                                     size =(WIDTH*2,HEIGHT*4.5),root=u"全部中介",items=self.agencies)
+
+        self.BondTypeTree.ExpandAll()
+        self.CRCompanyTree.ExpandAll()
+        self.CRBondTree.ExpandAll()
+        self.AgencyTree.ExpandAll()
+
+
+
         self.label1 = wx.StaticText(bkg, -1, u"开始时间", pos=(ANCHOR, 60))
         self.label2 = wx.StaticText(bkg, -1, u"结束时间", pos=(260, 60))
         self.label3 = wx.StaticText(bkg, -1, u"最低利率", pos=(ANCHOR, 90))
@@ -414,8 +594,8 @@ class MainWindow(wx.Frame):
         self.label6 = wx.StaticText(bkg, -1, u"最大期限", pos=(260, 120))
         self.StartDateText = wx.TextCtrl(bkg,-1,size=(WIDTH*1.7,HEIGHT),pos = (ANCHOR+WIDTH+SPACE,60),value=get_time(1))
         self.EndDateText   = wx.TextCtrl(bkg,-1,size=(WIDTH*1.7,HEIGHT), pos = (350,60),value=get_time(1))
-        self.MaxPriceText = wx.TextCtrl(bkg,-1,size=(WIDTH*1.7,HEIGHT),pos = (350,90),value = "4.80")
-        self.MinPriceText   = wx.TextCtrl(bkg,-1,size=(WIDTH*1.7,HEIGHT), pos = (ANCHOR+WIDTH+SPACE,90),value="4.51")
+        self.MaxPriceText = wx.TextCtrl(bkg,-1,size=(WIDTH*1.7,HEIGHT),pos = (350,90),value = "5.80")
+        self.MinPriceText   = wx.TextCtrl(bkg,-1,size=(WIDTH*1.7,HEIGHT), pos = (ANCHOR+WIDTH+SPACE,90),value="2.51")
         self.MaxTermText = wx.TextCtrl(bkg,-1,size=(WIDTH,HEIGHT),pos = (350,120),value = "10")
         self.MinTermText   = wx.TextCtrl(bkg,-1,size=(WIDTH,HEIGHT), pos = (ANCHOR+WIDTH+SPACE,120),value="1")
         self.term_unit_cb1 = wx.ComboBox(bkg,id= wx.NewId(),choices=self.term_units[0],
@@ -423,22 +603,37 @@ class MainWindow(wx.Frame):
         self.term_unit_cb2 = wx.ComboBox(bkg,id= wx.NewId(),choices=self.term_units[0],
                                          size=(WIDTH*0.7,HEIGHT),pos =(ANCHOR+(WIDTH)*2+SPACE,120),value=u"日")
 
+        self.Bind(wx.EVT_CLOSE,self.OnClose)
+
         self.txtpath   = ""
         self.xlpath    = ""
         self.xlpath_ex = ""
-        self.filter    ={}
         self.checked_items =[]
         self.Show(True)
         self.data = []
         self.export_data= []
         self.date      = ""
 
+        # try:
+        #     self.dbpath = self.GetDBs()[0]
+        # except:
+        #     dialog = wx.MessageDialog(None, u"暂无数据库，请新建至少一个数据库", u"提醒", wx.YES_NO | wx.ICON_QUESTION)
+        #     if dialog.ShowModal() == wx.ID_YES:
+        #         self.CreateDB()
+
+    def OnClose(self,e):
         try:
-            self.dbpath = self.GetDBs()[0]
-        except:
-            dialog = wx.MessageDialog(None, u"暂无数据库，请新建至少一个数据库", u"提醒", wx.YES_NO | wx.ICON_QUESTION)
-            if dialog.ShowModal() == wx.ID_YES:
-                self.CreateDB()
+            if self.connection:
+                self.connection.close()
+        except Exception as err:
+            print("Something went wrong: {}".format(err))
+            errdlg = wx.MessageDialog(None, u"错误发生: \n {}".format(err), u"错误提示", wx.ICON_QUESTION)
+            if errdlg.ShowModal() == wx.ID_YES:
+                errdlg.Destroy()
+
+        self.Destroy()
+        e.Skip()
+        sys.exit(0)
 
     def OnDelData(self,e):
         dialog = wx.MessageDialog(None, u"确定要从数据库删除这条记录？删除之后数据将无法恢复", u"提醒", wx.YES_NO | wx.ICON_QUESTION)
@@ -449,58 +644,74 @@ class MainWindow(wx.Frame):
                 row = cell[0]
                 if row > 0:
                     database_id = self.xlsFrame.GetCellValue(row,8)
+                    table = "tr" +self.xlsFrame.GetCellValue(row,0).replace("-","")[0:6]
                     try:
-                        if database_id:
-                            del_row_table(self.dbpath, int(database_id) )
-                        print "delete id= " + database_id + " from database successfully"
-
-                        for item in self.data:
-                            if item[8] ==int(database_id):
-                                print "------" +str(item[8])
-                                self.data.remove(item)
-                    except:
+                        if del_row_table(conn=self.connection, id=int(database_id),table=table):
+                            print "delete id= " + database_id + " from database successfully"
+                            self.data.remove(self.data[row-1])
+                    except Exception as err:
+                        self.connection.rollback()
+                        print("Something went wrong: {}".format(err))
                         print "fail to delete id= " + database_id + " from database"
+                        errdialog = wx.MessageDialog(None, u"数据删除失败: \n {}".format(err), u"错误提示",wx.ICON_QUESTION)
+                        if errdialog.ShowModal() ==wx.ID_YES:
+                            errdialog.Destroy()
             self.xlsFrame.Destroy()
             self.GetData()
 
-    def OnDB(self,e):
-        self.DBFrame = wx.Frame(None,title=u"数据库操作", size = (200,200))
-        self.DBFrame.Show()
-        p = wx.Panel(self.DBFrame,size =(500,300))
-        create_db_btn = wx.Button(p,label=u"新建数据库",pos=(20,20),size=(140,30))
-        choose_db_btn = wx.Button(p,label = u"选择默认数据库",pos=(20,60),size=(140,30))
-        del_db_btn = wx.Button(p,label = u"删除数据库",pos=(20,100),size=(140,30))
-        create_db_btn.Bind(wx.EVT_BUTTON,self.OnCreateDB)
-        choose_db_btn.Bind(wx.EVT_BUTTON, self.OnChooseDefaultDB)
-        del_db_btn.Bind(wx.EVT_BUTTON, self.OnDelDB)
+    # def OnDB(self,e):
+    #     self.DBFrame = wx.Frame(None,title=u"数据库操作", size = (200,200))
+    #     self.DBFrame.Show()
+    #     p = wx.Panel(self.DBFrame,size =(500,300))
+    #     create_db_btn = wx.Button(p,label=u"新建数据库",pos=(20,20),size=(140,30))
+    #     choose_db_btn = wx.Button(p,label = u"选择默认数据库",pos=(20,60),size=(140,30))
+    #     del_db_btn = wx.Button(p,label = u"删除数据库",pos=(20,100),size=(140,30))
+    #     create_db_btn.Bind(wx.EVT_BUTTON,self.OnCreateDB)
+    #     choose_db_btn.Bind(wx.EVT_BUTTON, self.OnChooseDefaultDB)
+    #     del_db_btn.Bind(wx.EVT_BUTTON, self.OnDelDB)
 
     def OnSearch(self,e):
         print self.search_text.GetValue()
+        advance_search = self.advance_search_cb.GetValue()
+
+        search_result = []
         search_column =self.search_column[1][self.search_column[0].index(self.search_column_cb.GetValue())]
-        search_result = search_table(self.dbpath,search_column,self.search_text.GetValue())
+
+        if advance_search:
+            tables,filter = self.GetFilter(type=1)
+            for table in tables:
+                search_result +=search_table(self.connection,search_column,self.search_text.GetValue(),table=table,filter=filter)
+        else:
+            for table in get_tables(self.connection):
+                try:
+                    search_result +=search_table(self.connection,search_column,self.search_text.GetValue(),table=table)
+                except :
+                    continue
         self.data = search_result
         self.GetData()
 
-    def OnCreateDB(self,e):
-        self.CreateDB()
+    # def OnCreateDB(self,e):
+    #     self.CreateDB()
+    #
+    # def OnChooseDefaultDB(self,e):
+    #     self.ChooseDefaultDB()
 
-    def OnChooseDefaultDB(self,e):
-        self.ChooseDefaultDB()
-
-    def OnDelDB(self,e):
-        choose_dlg = wx.SingleChoiceDialog(None,message=u"请选择要删除的数据库",caption= u"数据库操作", choices=list(self.GetDBs()))
-        if choose_dlg.ShowModal() == wx.ID_OK:
-            del_db= choose_dlg.GetStringSelection()
-            dialog = wx.MessageDialog(None, u"确定删除数据库？所有数据将被删除，不可修复。", u"警告", wx.YES_NO | wx.ICON_QUESTION)
-            if dialog.ShowModal() == wx.ID_YES:
-                self.DelDB(del_db)
-                dialog.Destroy()
-                choose_dlg.Destroy()
-        else:
-            choose_dlg.Destroy()
+    # def OnDelDB(self,e):
+    #     choose_dlg = wx.SingleChoiceDialog(None,message=u"请选择要删除的数据库",caption= u"数据库操作", choices=list(self.GetDBs()))
+    #     if choose_dlg.ShowModal() == wx.ID_OK:
+    #         del_db= choose_dlg.GetStringSelection()
+    #         dialog = wx.MessageDialog(None, u"确定删除数据库？所有数据将被删除，不可修复。", u"警告", wx.YES_NO | wx.ICON_QUESTION)
+    #         if dialog.ShowModal() == wx.ID_YES:
+    #             self.DelDB(del_db)
+    #             dialog.Destroy()
+    #             choose_dlg.Destroy()
+    #     else:
+    #         choose_dlg.Destroy()
 
     def onGetData(self,e):
-        self.data = select_table(self.dbpath,self.GetFilter())
+        self.data = []
+        for filter_clause in self.GetFilter():
+            self.data += select_table(self.connection,filter_clause)
         print "self.data " + str(self.data)
         self.GetData()
 
@@ -511,7 +722,7 @@ class MainWindow(wx.Frame):
             self.xlpath_ex = dialog.GetPath()#.encode('utf-8')
             export_excel(self.export_data,self.xlpath_ex)
 
-    def onImportTxt(self, e):
+    def OnImportTxt(self, e):
         datedlg = wx.TextEntryDialog(None,  u"请输入成交日期","", get_time(1))
         if datedlg.ShowModal() == wx.ID_OK:
             date = datedlg.GetValue()
@@ -530,13 +741,23 @@ class MainWindow(wx.Frame):
                         import_text(self.txtpath,self.xlpath,date=date)
                         dialog2.Destroy()
 
-    def onImportExcel(self, e):
+    def OnImportExcel(self, e):
         dialog = wx.FileDialog(None, "Choose an excel file...", style=wx.OPEN)
+        fail_collection = []
+
         if dialog.ShowModal() == wx.ID_OK:
             self.xlpath = dialog.GetPath()#.encode('utf-8')
-            self.dbpath = self.GetDBs()[0]
-            fail_collection = import_excel(xlpath= self.xlpath,dbpath=self.dbpath)
             dialog.Destroy()
+
+            try:
+                fail_collection = import_excel(xlpath= self.xlpath,conn=self.connection)
+            except Exception as err:
+                print("Something went wrong: {}".format(err))
+                errdlg = wx.MessageDialog(None, u"错误发生: \n {}".format(err), u"错误提示", wx.ICON_QUESTION)
+                if errdlg.ShowModal() == wx.ID_YES:
+                    errdlg.Destroy()
+
+
             if fail_collection:
                 fail_collection.insert(0,database_title)
                 self.export_data = fail_collection
@@ -546,7 +767,10 @@ class MainWindow(wx.Frame):
                 dialog = wx.MessageDialog(None, u"数据已经全部成功导入数据库",  u"提醒", wx.YES_NO)
                 dialog.ShowModal()
 
-    def GetFilter(self):
+    def GetFilter(self,type=0):
+        #如果type等于默认值0，返回完整的执行语句，如果type等于1，返回筛选条件语句
+        self.filter = ""
+
         max_price = self.MaxPriceText.GetValue()
         min_price = self.MinPriceText.GetValue()
 
@@ -560,45 +784,46 @@ class MainWindow(wx.Frame):
         min_unit = self.term_units[1][self.term_units[0].index(self.term_unit_cb2.GetValue())]
 
         bond_types = self.BondTypeTree.get_checked_item()
-        ratings = self.CRTree.get_checked_item()
+        company_ratings = self.CRCompanyTree.get_checked_item()
+        bond_ratings = self.CRBondTree.get_checked_item()
         agencies = self.AgencyTree.get_checked_item()
 
+        selected_tables = []
 
         if IsDate(start_date,end_date) and IsNumber(min_term,max_term):
-            self.filter = " SELECT date, term_text, bond_id, name, price_text, rating_text, type, agency,id FROM TR WHERE (" + max_price + " >= price) AND (price >= " + min_price + ")"
-            self.filter += " AND (" + end_date.replace("-", "") + " >= date) AND( date >= " + start_date.replace("-", "") + ")"
-            self.filter += "AND (" + str(int(float(max_term) * float(max_unit))) + ">= term) AND ( term>= " + str(int(float(min_term)*float(min_unit))) +")"
+            s_datetime = datetime.strptime(start_date,"%Y-%m-%d")
+            e_datetime = datetime.strptime(end_date, "%Y-%m-%d")
 
-            if (bond_types != self.bond_types) and(len(bond_types)!=0):
-                self.filter += " AND ( "
-                for bond in bond_types:
-                    self.filter += " ( type = '" + str(bond) + "' ) "
-                    if bond!= bond_types[-1]:
-                        self.filter +=  " OR "
-                    else:
-                        self.filter +=" ) "
+            selected_tables.extend("tr"+ x for x in monthdelta(s_datetime,e_datetime ))
+            exist_tables = get_tables(self.connection)
+            tables =list(set(selected_tables) & set(exist_tables))
+            tables.sort(reverse=True)
 
-            if (ratings != self.ratings) and (len(ratings)!=0):
-                self.filter += " AND ( "
-                for rating in ratings:
-                    self.filter += " ( rating1 = '" + str(rating) + "' ) OR "
-                    self.filter += " ( rating2 = '" + str(rating) + "' ) "
-                    if rating!= ratings[-1]:
-                        self.filter +=  " OR "
-                    else:
-                        self.filter += " ) "
+            self.filter =  " (%s >= price) AND (price >= %s)"%(max_price,min_price)
+            self.filter += " AND ( %s >= date) AND (date >=%s)"%(end_date.replace("-", ""),start_date.replace("-", ""))
+            self.filter += " AND ( %d >= term) AND (term>= %d)"%(float(max_term) * float(max_unit),float(min_term)*float(min_unit))
 
-            if (agencies != self.agencies) and (len(ratings)!=0):
-                self.filter += " AND ( "
-                for agency in agencies:
-                    self.filter += " ( agency = '" + str(agency) + "' ) "
-                    if agency!= agencies[-1]:
-                        self.filter +=  " OR "
-                    else:
-                        self.filter += " ) "
+            selected_items = [[bond_types,company_ratings,bond_ratings,agencies],
+                              [self.bond_types,self.company_ratings,self.bond_ratings,self.agencies],
+                              ["type","company_rating","bond_rating","agency"]]
+
+            for i in range(len(selected_items[0])):
+                if selected_items[0][i] != selected_items[1][i]:
+                    self.filter += " AND ("
+                    for item in selected_items[0][i][:-1]:
+                        self.filter += "(%s = '%s') OR "%(selected_items[2][i],item)
+                    self.filter +="(%s = '%s'))"%(selected_items[2][i],selected_items[0][i][-1])
 
             print self.filter
-        return self.filter
+            filter_col =[]
+
+            if type ==0:
+                for table in tables:
+                    filter_col.append("SELECT %s FROM %s Where %s order by date desc"%(select_columns,table,self.filter))
+                return filter_col
+            elif type ==1:
+                return (tables,self.filter)
+
 
     def GetData(self):
         export_data = []
@@ -614,86 +839,122 @@ class MainWindow(wx.Frame):
             for j in range(1, len(self.data[i])):
                 export_data[i + 1].append(self.data[i][j])
         self.export_data = export_data
-        print "self.export_data " + str(self.export_data)
 
         if export_data:
             self.xlsFrame = XLFrame(export_data, self.OnExport, self.OnDelData)
             self.xlsFrame.Show()
+    #
+    # def ChooseDefaultDB(self):
+    #     if self.GetDBs() ==():
+    #         dialog = wx.MessageDialog(None, u"暂无数据库，请新建至少一个数据库", u"提醒", wx.YES_NO | wx.ICON_QUESTION)
+    #         if dialog.ShowModal() == wx.ID_YES:
+    #             if(self.CreateDB()):
+    #                 self.ChooseDefaultDB()
+    #     else:
+    #         choose_dlg = wx.SingleChoiceDialog(None,message=u"请选择默认使用的数据库",caption= u"数据库操作", choices=list(self.GetDBs()))
+    #         if choose_dlg.ShowModal() == wx.ID_OK:
+    #             chosen_db = choose_dlg.GetStringSelection()
+    #             self.SetDefaultDB(chosen_db)
+    #             self.dbpath = chosen_db
+    #             choose_dlg.Destroy()
+    #
+    #
+    # def CreateDB(self):
+    #     dialog = wx.TextEntryDialog(None, u"请输入数据库名称(英文)..", "","tr" )
+    #     if dialog.ShowModal() == wx.ID_OK:
+    #         dbpath= dialog.GetValue() +".db"
+    #         self.AddDB(dbpath)
+    #             # create_table(dbpath)
+    #
+    # def DelDB(self, del_db):
+    #     temp = self.GetDBs()
+    #     dbs = ()
+    #     for db in temp:
+    #         if db != del_db:
+    #             dbs += (db,)
+    #     os.remove(del_db)
+    #     print "Del db " + del_db
+    #     self.SetDBs(dbs)
+    #
+    # def AddDB(self,add_db):
+    #     temp = self.GetDBs()
+    #     if add_db in temp:
+    #         dlg = wx.MessageDialog(None, u"数据库已存在", u"错误提示", wx.YES_NO | wx.ICON_QUESTION)
+    #         if dlg.ShowModal() == wx.ID_YES:
+    #             dlg.Destroy()
+    #         return False
+    #     else:
+    #         dbs = temp + (add_db,)
+    #         self.SetDBs(dbs)
+    #         print "Add db " + add_db
+    #         return True
+    #
+    # def GetDBs(self):
+    #     try:
+    #         dbs = pickle.load(open('dbs.pkl', 'rb'))
+    #         print "Get dbs " + str(dbs)
+    #         return dbs
+    #     except:
+    #         return ()
+    #
+    # def SetDefaultDB(self, chosen_db):
+    #     temp = self.GetDBs()
+    #     dbs = (chosen_db,)
+    #     for db in temp:
+    #         if db!= chosen_db:
+    #             dbs += (db,)
+    #     self.SetDBs(dbs)
+    #     print "Set default db " + chosen_db
+    #
+    # def SetDBs(self,dbs):
+    #     try:
+    #         pickle.dump(dbs, open('dbs.pkl', 'wb'))
+    #         print "Set dbs " + str(dbs)
+    #     except:
+    #         print "fail to set dbs"
 
-    def ChooseDefaultDB(self):
-        if self.GetDBs() ==():
-            dialog = wx.MessageDialog(None, u"暂无数据库，请新建至少一个数据库", u"提醒", wx.YES_NO | wx.ICON_QUESTION)
-            if dialog.ShowModal() == wx.ID_YES:
-                if(self.CreateDB()):
-                    self.ChooseDefaultDB()
-        else:
-            choose_dlg = wx.SingleChoiceDialog(None,message=u"请选择默认使用的数据库",caption= u"数据库操作", choices=list(self.GetDBs()))
-            if choose_dlg.ShowModal() == wx.ID_OK:
-                chosen_db = choose_dlg.GetStringSelection()
-                self.SetDefaultDB(chosen_db)
-                self.dbpath = chosen_db
-                choose_dlg.Destroy()
+    def Connect_MySQL(self):
+        username = ''
+        password = ''
+        db =''
+        db_dlg = wx.TextEntryDialog(None, u"请输入数据库", "", 'htjrscb')
+        if db_dlg.ShowModal()== wx.ID_OK:
+            db = db_dlg.GetValue()
+            user_dlg = wx.TextEntryDialog(None, u"请输入用户名", "", 'htjrscb')
+            if user_dlg.ShowModal() == wx.ID_OK:
+                username = user_dlg.GetValue()
+                pwd_dlg = wx.TextEntryDialog(None, u"请输入密码", "", 'htjrscb888*')
+                if pwd_dlg.ShowModal() == wx.ID_OK:
+                    password = pwd_dlg.GetValue()
 
+                    if username and password and db:
+                        try:
+                            conn = MySQLdb.connect(
+                                host='rm-m5enrpx3vor980us7.mysql.rds.aliyuncs.com',
+                                port=3306,
+                                user=username,
+                                passwd=password,
+                                db=db)
+                            print "Successfully connect to MySQL on Aliyun"
+                            return conn
+                        except Exception as err:
+                            print("Something went wrong: {}".format(err))
+                            if err.args[0]==1045:
+                                errinfo = u"连接远程数据库失败: \n用户名或密码错误"
+                            elif err.args[0]==1044:
+                                errinfo = u"连接远程数据库失败: \n没有权限访问该数据库"
+                            else:
+                                errinfo = u"连接远程数据库失败: \n {}".format(err)
 
-    def CreateDB(self):
-        dialog = wx.TextEntryDialog(None, u"请输入数据库名称(英文)..", "","tr" )
-        if dialog.ShowModal() == wx.ID_OK:
-            dbpath= dialog.GetValue() +".db"
-            if self.AddDB(dbpath):
-                create_table(dbpath)
-
-    def DelDB(self, del_db):
-        temp = self.GetDBs()
-        dbs = ()
-        for db in temp:
-            if db != del_db:
-                dbs += (db,)
-        os.remove(del_db)
-        print "Del db " + del_db
-        self.SetDBs(dbs)
-
-    def AddDB(self,add_db):
-        temp = self.GetDBs()
-        if add_db in temp:
-            dlg = wx.MessageDialog(None, u"数据库已存在", u"错误提示", wx.YES_NO | wx.ICON_QUESTION)
-            if dlg.ShowModal() == wx.ID_YES:
-                dlg.Destroy()
-            return False
-        else:
-            dbs = temp + (add_db,)
-            self.SetDBs(dbs)
-            print "Add db " + add_db
-            return True
-
-    def GetDBs(self):
-        try:
-            dbs = pickle.load(open('dbs.pkl', 'rb'))
-            print "Get dbs " + str(dbs)
-            return dbs
-        except:
-            return ()
-
-    def SetDefaultDB(self, chosen_db):
-        temp = self.GetDBs()
-        dbs = (chosen_db,)
-        for db in temp:
-            if db!= chosen_db:
-                dbs += (db,)
-        self.SetDBs(dbs)
-        print "Set default db " + chosen_db
-
-    def SetDBs(self,dbs):
-        try:
-            pickle.dump(dbs, open('dbs.pkl', 'wb'))
-            print "Set dbs " + str(dbs)
-        except:
-            print "fail to set dbs"
+                            errdlg = wx.MessageDialog(None, errinfo+"\n是否重新登录？", u"错误提示", wx.YES_NO|wx.ICON_QUESTION)
+                            if errdlg.ShowModal() == wx.ID_YES:
+                                errdlg.Destroy()
+                                return self.Connect_MySQL()
 
 
 
 class TreeCtrl(CT.CustomTreeCtrl):
     def __init__(self,parent,id,root,items,pos=wx.DefaultPosition,size=wx.DefaultSize,style=wx.TR_DEFAULT_STYLE):
-        #CT.CustomTreeCtrl.__init__(panel=panel,pos=pos,agwStyle=wx.TR_DEFAULT_STYLE)
         CT.CustomTreeCtrl.__init__(self,parent,id,pos,size,style)
         self.root = self.AddRoot(root,ct_type=1)
         for item in items:
@@ -727,7 +988,7 @@ class TreeCtrl(CT.CustomTreeCtrl):
                         self.CheckItem(item, True)
                     self.CheckItem(checked_item,False)
                 # print "remove"
-        print self.checked_items
+        # print self.checked_items
 
     def get_tree_children(self,item_obj):
         item_list = []
@@ -768,12 +1029,16 @@ class XLFrame(wx.Frame):
             for j in range(len(data[i])):
                 temp = ""
                 try:
-                    temp = data[i][j]
+                    temp = data[i][j].decode('utf-8')
                     self.myGrid.SetCellValue(i, j, temp)
                 except:
-                    if (type(data[i][j]) == type(1)) or (type(data[i][j] == type(1.11))):
+                    temp = data[i][j]
+                    try:
                         temp = str(temp)
                         self.myGrid.SetCellValue(i, j, temp)
+                    except:
+                        pass
+
         export_button = wx.Button(panel,label=u"导出")
         export_button.Bind(wx.EVT_BUTTON,export_func)
 
@@ -804,7 +1069,7 @@ class XLFrame(wx.Frame):
 
     def onSingleSelect(self, e):
         self.currentlySelectedCell = (e.GetRow(),e.GetCol())
-        print "current selected cell " + str(self.currentlySelectedCell)
+        # print "current selected cell " + str(self.currentlySelectedCell)
         e.Skip()
 
     def GetSelectedCells(self, top_left, bottom_right):
