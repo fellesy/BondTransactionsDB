@@ -475,11 +475,11 @@ def adjust_row(data):
 def StrToDays(term):
     term_in_days = 0
     if ("Y" in term) or ("y" in term):
-        term_in_days = int(float(term[:len(term) - 1]) * 365)
+        term_in_days = int(float(term[:-1]) * 365)
     elif ("D" in term) or ("d" in term):
-        term_in_days = int(term[:len(term) - 1])
+        term_in_days = int(float(term[:-1]))
     elif ("M" in term) or ("m" in term):
-        term_in_days = int(float(term[:len(term) - 1]) * 30)
+        term_in_days = int(float(term[:-1]) * 30)
     return term_in_days
 
 def rating_index(rating):
@@ -750,18 +750,20 @@ class MainWindow(wx.Frame):
     def OnImportExcel(self, e):
         dialog = wx.FileDialog(None, "Choose an excel file...", style=wx.OPEN)
         fail_collection = []
+        err_exist = False
 
         if dialog.ShowModal() == wx.ID_OK:
             self.xlpath = dialog.GetPath()#.encode('utf-8')
             dialog.Destroy()
 
-            try:
-                fail_collection = import_excel(xlpath= self.xlpath,conn=self.connection)
-            except Exception as err:
-                print("Something went wrong: {}".format(err))
-                errdlg = wx.MessageDialog(None, u"错误发生: \n {}".format(err), u"错误提示", wx.ICON_QUESTION)
-                if errdlg.ShowModal() == wx.ID_YES:
-                    errdlg.Destroy()
+            # try:
+            fail_collection = import_excel(xlpath= self.xlpath,conn=self.connection)
+            # except Exception as err:
+            #     print("Something went wrong: {}".format(err))
+            #     errdlg = wx.MessageDialog(None, u"错误发生: \n {}".format(err), u"错误提示", wx.ICON_QUESTION)
+            #     err_exist = True
+            #     if errdlg.ShowModal() == wx.ID_YES:
+            #         errdlg.Destroy()
 
 
             if fail_collection:
@@ -770,8 +772,9 @@ class MainWindow(wx.Frame):
                 fail_xlsFrame = XLFrame(fail_collection, title=u"导入失败的数据", export_func=self.OnExport)
                 fail_xlsFrame.Show()
             else:
-                dialog = wx.MessageDialog(None, u"数据已经全部成功导入数据库",  u"提醒", wx.YES_NO)
-                dialog.ShowModal()
+                if not err_exist:
+                    dialog = wx.MessageDialog(None, u"数据已经全部成功导入数据库",  u"提醒", wx.YES_NO)
+                    dialog.ShowModal()
 
     def GetFilter(self,type=0):
         #如果type等于默认值0，返回完整的执行语句，如果type等于1，返回筛选条件语句
