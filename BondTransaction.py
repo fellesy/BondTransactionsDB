@@ -74,24 +74,29 @@ def import_excel(xlpath, conn):
     fail_rows1 = []
 
     for i in range(1,nrow):
-        temp = sheet.row_values(i)
+        temp_row = sheet.row_values(i)
         row = []
         #判断格式是否正确，如果满足条件，对数据进行调整然后导入云端数据库
-        for item in temp:
-            if item !="" or item ==" ":
-                row.append(item)
-        print len(row)
-        print row
-        if (len(row) <8):
-            fail_rows1.append(row)
-        elif (len(row)>12):
-            fail_rows1.append(row)
+        print len(temp_row)
+        print temp_row
+        if (len(temp_row) <8):
+            fail_rows1.append(temp_row)
+
         else:
-            row = adjust_row(row[0:8])
-            if row[-1]=="error":
-                fail_rows1.append(tuple(row))
+            for i in range(len(temp_row)):
+                if i < 8:
+                    row.append(temp_row[i])
+                elif (temp_row[i] != "" and temp_row[i] != " "):
+                    row.append(temp_row[i])
+
+            if (len(row)>12):
+                fail_rows1.append(row)
             else:
-                row_list.append(tuple(row))
+                row = adjust_row(row[0:8])
+                if row[-1]=="error":
+                    fail_rows1.append(tuple(row))
+                else:
+                    row_list.append(tuple(row))
 
     success_rows, fail_rows2 = insert_table(data=row_list,conn=conn)
 
@@ -297,34 +302,22 @@ def search_table(conn,item, keyword, table, filter=""):
         print "first shot of search "+ str(result)
 
         if (len(result) == 0) and (item =="name"):
+            regex = "REGEXP '%s'"%('.*'.join(keyword)+".*")
+
             if filter:
-                clause = "SELECT name FROM  %s Where %s order by date desc"%(table,filter)
+                clause = "SELECT %s FROM %s WHERE (name %s) AND (%s) order by date desc"%(select_columns,table,regex,filter)
             else:
-                clause = "SELECT name FROM %s order by date desc"%(table)
+                clause = "SELECT %s FROM %s WHERE name %s order by date desc"%(select_columns,table,regex)
+            print clause
             cursor.execute(clause)
-            collection = []
-            result =[]
-
-            names = cursor.fetchall()
-            for name in names:
-                collection.append(name[0].decode('utf-8'))
-            fuzzy_results = fuzzyFinder(keyword,collection=collection)
-            print "second shot of search: "+ str( fuzzy_results)
-
-            for fuzzy_result in fuzzy_results:
-                clause ="SELECT %s FROM %s WHERE ( name='%s' ) %s order by date desc"\
-                        %(select_columns,table,fuzzy_result," AND %s"%filter)
-                print clause
-                cursor.execute(clause)
-                result.append(cursor.fetchone())
+            result = cursor.fetchall()
+            print "second shot of search: "+ str(result)
         cursor.close()
     else:
         if filter:
-
             clause = "SELECT %s from %s Where %s order by date desc"%(select_columns,table, filter)
         else:
             clause = "SELECT %s from %s order by date desc"%(select_columns,table)
-
         print clause
 
         cursor.execute(clause)
@@ -372,25 +365,25 @@ def del_row_table(conn, id,table):
     return True
 
 
-def fuzzyFinder(keyword,collection):
-    suggestions =[]
-    pattern = '.*'.join(keyword)
-    regex = re.compile(pattern)
-    for item in collection:
-        match = regex.search(item)
-        if match:
-            suggestions.append(item)
-    if suggestions:
-        return suggestions
-    else:
-        print " no perfect match. Find similar results"
-        pattern = '[%s]+'%keyword
-        regex = re.compile(pattern)
-        for item in collection:
-            match = regex.search(item)
-            if match:
-                suggestions.append(item)
-        return suggestions
+# def fuzzyFinder(keyword,collection):
+#     suggestions =[]
+#     pattern = '.*'.join(keyword)
+#     regex = re.compile(pattern)
+#     for item in collection:
+#         match = regex.search(item)
+#         if match:
+#             suggestions.append(item)
+#     if suggestions:
+#         return suggestions
+#     else:
+#         print " no perfect match. Find similar results"
+#         pattern = '[%s]*'%keyword
+#         regex = re.compile(pattern)
+#         for item in collection:
+#             match = regex.search(item)
+#             if match:
+#                 suggestions.append(item)
+#         return suggestions
 
 
 
@@ -461,9 +454,10 @@ def adjust_row(data):
         adjusted_data.append(rating1)
         adjusted_data.append(rating2)
 
-    elif data[5] == '':
+    elif data[5] in (' ', '', '0.0','0'):
         adjusted_data.append("0")
         adjusted_data.append("0")
+        rating_result = '0'
     else:
         try:
            rating1 = int(data[5])
@@ -473,7 +467,7 @@ def adjust_row(data):
         except:
             pass
 
-    if not (price_result) or (not rating_result) or (not term_result) or (len(adjusted_data)>12):
+    if not (price_result) or (not term_result) or (len(adjusted_data)>12) or (not rating_result):
         adjusted_data.append("error")
 
     return adjusted_data
@@ -547,7 +541,7 @@ class MainWindow(wx.Frame):
             sys.exit(0)
 
         wx.Frame.__init__(self, parent, title = title,size = (700,300))
-        self.gaugeFrame = GaugeFrame()
+        # self.gaugeFrame = GaugeFrame()
         ANCHOR = 20
         SPACE = 10
         WIDTH = 80
@@ -696,7 +690,8 @@ class MainWindow(wx.Frame):
             for table in get_tables(self.connection):
                 try:
                     search_result +=search_table(self.connection,search_column,self.search_text.GetValue(),table=table)
-                except :
+                except Exception as err :
+                    print "something went wrong {}".format(err)
                     continue
         self.data = search_result
         self.GetData()
@@ -928,20 +923,20 @@ class MainWindow(wx.Frame):
         username = ''
         password = ''
         db =''
-        db_dlg = wx.TextEntryDialog(None, u"请输入数据库", "", 'htjrscb')
+        db_dlg = wx.TextEntryDialog(None, u"请输入数据库", "", 'htzq-bonds-db')
         if db_dlg.ShowModal()== wx.ID_OK:
             db = db_dlg.GetValue()
-            user_dlg = wx.TextEntryDialog(None, u"请输入用户名", "", 'htjrscb')
+            user_dlg = wx.TextEntryDialog(None, u"请输入用户名", "", 'htzq')
             if user_dlg.ShowModal() == wx.ID_OK:
                 username = user_dlg.GetValue()
-                pwd_dlg = wx.TextEntryDialog(None, u"请输入密码", "", 'htjrscb888*')
+                pwd_dlg = wx.TextEntryDialog(None, u"请输入密码", "", 'htzq888*')
                 if pwd_dlg.ShowModal() == wx.ID_OK:
                     password = pwd_dlg.GetValue()
 
                     if username and password and db:
                         try:
                             conn = MySQLdb.connect(
-                                host='rm-m5enrpx3vor980us7.mysql.rds.aliyuncs.com',
+                                host="htzqbonds.mysql.rds.aliyuncs.com",#'rm-m5enrpx3vor980us7.mysql.rds.aliyuncs.com',
                                 port=3306,
                                 user=username,
                                 passwd=password,
@@ -1110,22 +1105,26 @@ class XLFrame(wx.Frame):
     def GetCellValue(self,row,col):
         return self.myGrid.GetCellValue(row,col)
 
-class GaugeFrame(wx.Frame):
-    def __init__(self):
-        wx.Frame.__init__(self, None, -1, 'Gauge Example',
-                          size=(350, 150))
-        panel = wx.Panel(self, -1)
-        self.count = 0
-        self.gauge = wx.Gauge(panel, -1, 50, (20, 50), (250, 25))
-        self.gauge.SetBezelFace(3)
-        self.gauge.SetShadowWidth(3)
-        self.Bind(wx.EVT_IDLE, self.OnIdle)
-
-    def OnIdle(self, e):
-        self.count = self.count + 1
-        if self.count == 50:
-            self.Hide()
-        self.gauge.SetValue(self.count)
+# class GaugeFrame(wx.Frame):
+#     def __init__(self,func=None):
+#         wx.Frame.__init__(self, None, -1, 'Gauge Example',
+#                           size=(350, 150))
+#         panel = wx.Panel(self, -1)
+#         self.count = 0
+#         self.gauge = wx.Gauge(panel, -1, 50, (20, 50), (250, 25))
+#         self.gauge.SetBezelFace(3)
+#         self.gauge.SetShadowWidth(3)
+#         self.Bind(wx.EVT_IDLE, self.OnIdle)
+#         self.func = func
+#
+#     def OnIdle(self, e):
+#         self.count = self.count + 1
+#         if self.count == self.func():
+#             self.Hide()
+#         self.gauge.SetValue(self.count)
+#
+#     def SetCount(self,count):
+#         self.count = count
 
 if __name__ == "__main__":
     print get_time()
