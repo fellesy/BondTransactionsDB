@@ -100,7 +100,7 @@ def import_excel(xlpath, conn):
 
     success_rows, fail_rows2 = insert_table(data=row_list,conn=conn)
 
-    return fail_rows1+fail_rows2
+    return success_rows,fail_rows1+fail_rows2
 
 
 def export_excel(data,xlpath, wrong_data =None):
@@ -328,18 +328,14 @@ def search_table(conn,item, keyword, table, filter=""):
 def get_tables(conn):
     cursor = conn.cursor()
     tables = []
-    try:
-        cursor.execute("SHOW TABLES")
-        print "## get names of tables ##"
-        result = cursor.fetchall()
-        print result
-        tables.extend(x[0] for x in result)
-        cursor.close()
-        tables.sort(reverse=True)
-        return tables
-    except Exception as err:
-        print("Something went wrong: {}".format(err))
-        return []
+    cursor.execute("SHOW TABLES")
+    print "## get names of tables ##"
+    result = cursor.fetchall()
+    print result
+    tables.extend(x[0] for x in result)
+    cursor.close()
+    tables.sort(reverse=True)
+    return tables
 
 def test_insert(data):
     test_db = 'test.db'
@@ -556,7 +552,7 @@ class MainWindow(wx.Frame):
         bkg = wx.Panel(self,style=wx.TAB_TRAVERSAL | wx.CLIP_CHILDREN | wx.FULL_REPAINT_ON_RESIZE)
 
         getdata_button = wx.Button(bkg, label=u"提取数据", size = (WIDTH,HEIGHT), pos = (ANCHOR+(WIDTH+SPACE)*6.2,ANCHOR))
-        getdata_button.Bind(wx.EVT_BUTTON, self.onGetData)
+        getdata_button.Bind(wx.EVT_BUTTON, self.OnGetData)
 
         txt_button = wx.Button(bkg, label = u"txt转excel", size = (WIDTH,HEIGHT), pos=(ANCHOR+(WIDTH+SPACE)*6.2,ANCHOR+(HEIGHT+SPACE)*1))
         txt_button.Bind(wx.EVT_BUTTON, self.OnImportTxt)
@@ -564,16 +560,13 @@ class MainWindow(wx.Frame):
         xl_button  = wx.Button(bkg, label = u"导入excel",    size = (WIDTH,HEIGHT), pos=(ANCHOR+(WIDTH+SPACE)*6.2,ANCHOR+(HEIGHT+SPACE)*2))
         xl_button.Bind(wx.EVT_BUTTON, self.OnImportExcel)
 
-        # db_button = wx.Button(bkg,label = u"数据库操作",size = (WIDTH,HEIGHT), pos =(ANCHOR+(WIDTH+SPACE)*5.5,ANCHOR+(HEIGHT+SPACE)*3))
-        # db_button.Bind(wx.EVT_BUTTON,self.OnDB)
-
-        search_button = wx.Button(bkg, label=u"搜索",size=(WIDTH*0.8,HEIGHT), pos = (ANCHOR+WIDTH+WIDTH/1.5,ANCHOR))
-        self.search_text = wx.TextCtrl(bkg,size = (WIDTH,HEIGHT), style= wx.TE_PROCESS_ENTER, pos = (ANCHOR,ANCHOR))
-        self.search_text.Bind(wx.EVT_TEXT_ENTER, self.OnSearch)
-        search_button.Bind(wx.EVT_BUTTON, self.OnSearch)
-        self.search_column_cb = wx.ComboBox(bkg,choices=self.search_column[0], size=(WIDTH/1.5,HEIGHT),pos =(ANCHOR+WIDTH,ANCHOR),value= self.search_column[0][0])
-        self.advance_search_cb = wx.CheckBox(bkg,-1,u"高级搜索",pos=(ANCHOR+WIDTH*2.5+SPACE,ANCHOR))
-        self.advance_search_cb.SetValue(True)
+        # search_button = wx.Button(bkg, label=u"搜索",size=(WIDTH*0.8,HEIGHT), pos = (ANCHOR+WIDTH+WIDTH/1.5,ANCHOR))
+        self.search_text = wx.TextCtrl(bkg,size = (WIDTH,HEIGHT), style= wx.TE_PROCESS_ENTER, pos = (ANCHOR+WIDTH+SPACE,ANCHOR+SPACE))
+        self.search_text.Bind(wx.EVT_TEXT_ENTER, self.OnGetData)
+        # search_button.Bind(wx.EVT_BUTTON, self.OnSearch)
+        self.search_column_cb = wx.ComboBox(bkg,choices=self.search_column[0], size=(WIDTH/1.5,HEIGHT),pos =(ANCHOR+(WIDTH+SPACE/2)*2,ANCHOR+SPACE),value= self.search_column[0][0])
+        # self.advance_search_cb = wx.CheckBox(bkg,-1,u"高级搜索",pos=(ANCHOR+WIDTH*2.5+SPACE,ANCHOR))
+        # self.advance_search_cb.SetValue(True)
 
         self.BondTypeTree = TreeCtrl(parent =bkg,id = wx.NewId(), pos=(ANCHOR,ANCHOR+(HEIGHT+SPACE)*4),
                                      size =(WIDTH*2,HEIGHT*4.5),root=u"全部类型",items=self.bond_types)
@@ -590,7 +583,7 @@ class MainWindow(wx.Frame):
         self.AgencyTree.ExpandAll()
 
 
-
+        self.label0 = wx.StaticText(bkg, -1, u"关键字", pos=(ANCHOR, ANCHOR+SPACE))
         self.label1 = wx.StaticText(bkg, -1, u"开始时间", pos=(ANCHOR, 60))
         self.label2 = wx.StaticText(bkg, -1, u"结束时间", pos=(260, 60))
         self.label3 = wx.StaticText(bkg, -1, u"最低利率", pos=(ANCHOR, 90))
@@ -631,10 +624,7 @@ class MainWindow(wx.Frame):
             if self.connection:
                 self.connection.close()
         except Exception as err:
-            print("Something went wrong: {}".format(err))
-            errdlg = wx.MessageDialog(None, u"错误发生: \n {}".format(err), u"错误提示", wx.ICON_QUESTION)
-            if errdlg.ShowModal() == wx.ID_YES:
-                errdlg.Destroy()
+            self.ErrDialog(err)
 
         self.Destroy()
         e.Skip()
@@ -653,17 +643,15 @@ class MainWindow(wx.Frame):
                     try:
                         if del_row_table(conn=self.connection, id=int(database_id),table=table):
                             print "delete id= " + database_id + " from database successfully"
-                            self.data.remove(self.data[row-1])
                     except Exception as err:
                         self.connection.rollback()
                         print("Something went wrong: {}".format(err))
                         print "fail to delete id= " + database_id + " from database"
                         errdialog = wx.MessageDialog(None, u"数据删除失败: \n {}".format(err), u"错误提示",wx.ICON_QUESTION)
-                        if errdialog.ShowModal() ==wx.ID_YES:
-                            errdialog.Destroy()
+                        if errdialog.ShowModal() ==wx.ID_OK:
+                            sys.exit(0)
             self.xlsFrame.Destroy()
-            self.GetData()
-
+            self.OnGetData(e)
     # def OnDB(self,e):
     #     self.DBFrame = wx.Frame(None,title=u"数据库操作", size = (200,200))
     #     self.DBFrame.Show()
@@ -675,24 +663,19 @@ class MainWindow(wx.Frame):
     #     choose_db_btn.Bind(wx.EVT_BUTTON, self.OnChooseDefaultDB)
     #     del_db_btn.Bind(wx.EVT_BUTTON, self.OnDelDB)
 
-    def OnSearch(self,e):
+    def OnGetData(self,e):
         print self.search_text.GetValue()
-        advance_search = self.advance_search_cb.GetValue()
-
+        # advance_search = self.advance_search_cb.GetValue()
         search_result = []
         search_column =self.search_column[1][self.search_column[0].index(self.search_column_cb.GetValue())]
 
-        if advance_search:
-            tables,filter = self.GetFilter(type=1)
-            for table in tables:
-                search_result +=search_table(self.connection,search_column,self.search_text.GetValue(),table=table,filter=filter)
-        else:
-            for table in get_tables(self.connection):
-                try:
-                    search_result +=search_table(self.connection,search_column,self.search_text.GetValue(),table=table)
-                except Exception as err :
-                    print "something went wrong {}".format(err)
-                    continue
+        tables,filter = self.GetFilter(type=1)
+        for table in tables:
+            try:
+                search_result += search_table(self.connection, search_column, self.search_text.GetValue(), table=table,
+                                              filter=filter)
+            except Exception as err :
+                self.ErrDialog(err)
         self.data = search_result
         self.GetData()
 
@@ -714,12 +697,12 @@ class MainWindow(wx.Frame):
     #     else:
     #         choose_dlg.Destroy()
 
-    def onGetData(self,e):
-        self.data = []
-        for filter_clause in self.GetFilter():
-            self.data += select_table(self.connection,filter_clause)
-        print "self.data " + str(self.data)
-        self.GetData()
+    # def onGetData(self,e):
+    #     self.data = []
+    #     for filter_clause in self.GetFilter():
+    #         self.data += select_table(self.connection,filter_clause)
+    #     print "self.data " + str(self.data)
+    #     self.GetData()
 
     def OnExport(self,e):
         wildcard = u"Excel 文件(*.xls)|.xls"
@@ -747,6 +730,7 @@ class MainWindow(wx.Frame):
                         import_text(self.txtpath,self.xlpath,date=date)
                         dialog2.Destroy()
 
+
     def OnImportExcel(self, e):
         dialog = wx.FileDialog(None, "Choose an excel file...", style=wx.OPEN)
         fail_collection = []
@@ -756,14 +740,14 @@ class MainWindow(wx.Frame):
             self.xlpath = dialog.GetPath()#.encode('utf-8')
             dialog.Destroy()
 
-            # try:
-            fail_collection = import_excel(xlpath= self.xlpath,conn=self.connection)
-            # except Exception as err:
-            #     print("Something went wrong: {}".format(err))
-            #     errdlg = wx.MessageDialog(None, u"错误发生: \n {}".format(err), u"错误提示", wx.ICON_QUESTION)
-            #     err_exist = True
-            #     if errdlg.ShowModal() == wx.ID_YES:
-            #         errdlg.Destroy()
+            try:
+                success_collection,fail_collection = import_excel(xlpath= self.xlpath,conn=self.connection)
+            except Exception as err:
+                print("OnImport Excel | Something went wrong: {}".format(err))
+                errdlg = wx.MessageDialog(None, u"错误发生: \n {}".format(err), u"错误提示", wx.ICON_QUESTION)
+                err_exist = True
+                if errdlg.ShowModal() == wx.ID_OK:
+                    errdlg.Destroy()
 
 
             if fail_collection:
@@ -771,10 +755,25 @@ class MainWindow(wx.Frame):
                 self.export_data = fail_collection
                 fail_xlsFrame = XLFrame(fail_collection, title=u"导入失败的数据", export_func=self.OnExport)
                 fail_xlsFrame.Show()
+                successdlg = wx.MessageDialog(None, u"已经导入 %s 条数据"%len(success_collection), u"提示")
+                if successdlg.ShowModal() == wx.ID_OK:
+                    successdlg.Destroy()
             else:
                 if not err_exist:
                     dialog = wx.MessageDialog(None, u"数据已经全部成功导入数据库",  u"提醒", wx.YES_NO)
                     dialog.ShowModal()
+
+
+    def ErrDialog(self,err):
+        print("Something went wrong: {}".format(err))
+        if err.args[0] == 2006:
+            errinfo = u"数据库连接失败"
+        else:
+            errinfo = u"出错: \n {}".format(err)
+
+        errdialog = wx.MessageDialog(None, errinfo, u"错误提示", wx.ICON_QUESTION)
+        if errdialog.ShowModal() == wx.ID_OK:
+            errdialog.Destroy()
 
     def GetFilter(self,type=0):
         #如果type等于默认值0，返回完整的执行语句，如果type等于1，返回筛选条件语句
@@ -804,7 +803,12 @@ class MainWindow(wx.Frame):
             e_datetime = datetime.strptime(end_date, "%Y-%m-%d")
 
             selected_tables.extend("tr"+ x for x in monthdelta(s_datetime,e_datetime ))
-            exist_tables = get_tables(self.connection)
+            try:
+                exist_tables = get_tables(self.connection)
+            except Exception as err:
+                self.ErrDialog(err)
+                exist_tables = []
+
             tables =list(set(selected_tables) & set(exist_tables))
             tables.sort(reverse=True)
 
@@ -823,7 +827,7 @@ class MainWindow(wx.Frame):
                         self.filter += "(%s = '%s') OR "%(selected_items[2][i],item)
                     self.filter +="(%s = '%s'))"%(selected_items[2][i],selected_items[0][i][-1])
 
-            print self.filter
+            #print self.filter
             filter_col =[]
 
             if type ==0:
