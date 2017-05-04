@@ -12,6 +12,8 @@ import os
 import wx.lib.agw.customtreectrl as CT
 from datetime import datetime
 import MySQLdb
+from threading import Thread
+from Queue import Queue
 
 reload(sys)
 sys.setdefaultencoding('utf-8')
@@ -70,37 +72,39 @@ def import_excel(xlpath, conn):
     book = xlrd.open_workbook(xlpath)
     sheet = book.sheet_by_index(0)
     nrow = sheet.nrows
-    row_list = []
+    data = []
     fail_rows1 = []
 
     for i in range(1,nrow):
         temp_row = sheet.row_values(i)
         row = []
         #判断格式是否正确，如果满足条件，对数据进行调整然后导入云端数据库
-        print len(temp_row)
-        print temp_row
-        if (len(temp_row) <8):
+
+        #不能小于8格
+        if (len(temp_row) <8 or ("" in temp_row[:8]) or (" " in temp_row[:8]) ):
             fail_rows1.append(temp_row)
 
         else:
-            for i in range(len(temp_row)):
-                if i < 8:
-                    row.append(temp_row[i])
-                elif (temp_row[i] != "" and temp_row[i] != " "):
-                    row.append(temp_row[i])
+            #去除行尾的空白格
+            for j in range(len(temp_row)):
+                if j < 8:
+                        row.append(temp_row[j])
+                elif (temp_row[j] not in [""," "]):
+                    row.append(temp_row[j])
 
+            #不可以大于12格
             if (len(row)>12):
                 fail_rows1.append(row)
             else:
+                #调整导入数据格式
                 row = adjust_row(row[0:8])
                 if row[-1]=="error":
                     fail_rows1.append(tuple(row))
                 else:
-                    row_list.append(tuple(row))
-
-    success_rows, fail_rows2 = insert_table(data=row_list,conn=conn)
-
-    return success_rows,fail_rows1+fail_rows2
+                    data.append(tuple(row))
+    # success_rows, fail_rows2 = insert_table(data=row_list,conn=conn)
+    # return success_rows,fail_rows1+fail_rows2
+    return data,fail_rows1
 
 
 def export_excel(data,xlpath, wrong_data =None):
@@ -178,7 +182,6 @@ def create_local_table(dbpath):
 def insert_table(conn,data):
     print "------insert_table------"
 
-
     fail_collection = []
     success_collection = []
 
@@ -205,8 +208,6 @@ def insert_table(conn,data):
             i = max_id + 1
 
         temp = (i,) + tuple(item)
-        print temp
-
         try:
             cursor.execute("INSERT INTO "+table+" VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s);", temp)
             i += 1
@@ -220,8 +221,9 @@ def insert_table(conn,data):
     cursor.close()
     return success_collection, fail_collection
 
+
 def insert_local_table(dbpath,data):
-    print "------insert_table------"
+    print "------insert_local_table------"
     conn = sqlite3.connect(dbpath)
     cursor = conn.cursor()
 
@@ -231,7 +233,7 @@ def insert_local_table(dbpath,data):
 
     for item in data:
         temp = (i,) + tuple(item)
-        print temp
+        # print temp
         try:
             cursor.execute("INSERT INTO TR VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?);", temp)
             i += 1
@@ -247,8 +249,6 @@ def insert_local_table(dbpath,data):
 def IsTableExist(conn,table):
     cursor = conn.cursor()
     tables = []
-
-    print "get names of tables"
     try:
         cursor.execute("SHOW TABLES")  # Select Name from sqlite_master where type ='table' order by name")
         result = cursor.fetchall()
@@ -259,14 +259,14 @@ def IsTableExist(conn,table):
     cursor.close()
 
     if not tables:
-        print table + " not exists "
+        print table + " not exist "
         return False
 
     if table in tables:
-        print table + " exists "
+        # print table + " exists "
         return True
     else:
-        print table + " not exists "
+        print table + " not exist "
         return False
 
 def drop_table(conn,table):
@@ -329,9 +329,9 @@ def get_tables(conn):
     cursor = conn.cursor()
     tables = []
     cursor.execute("SHOW TABLES")
-    print "## get names of tables ##"
+    # print "## get names of tables ##"
     result = cursor.fetchall()
-    print result
+    # print result
     tables.extend(x[0] for x in result)
     cursor.close()
     tables.sort(reverse=True)
@@ -388,6 +388,8 @@ def get_time(type = 0):
         return time.strftime('%Y%m%d',time.localtime(time.time()))
     elif type ==1:
         return time.strftime('%Y-%m-%d',time.localtime(time.time()))
+    elif type ==2:
+        return time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time()))
 
 def adjust_row(data):
     adjusted_data = []
@@ -395,8 +397,9 @@ def adjust_row(data):
     date = str(data[0]).replace("-","")
     adjusted_data.append(date)
     for item in data[1:]:
-        # if item!="":
         adjusted_data.append(item)
+
+
     re_term = u"[0-9.]+[DMYdmy]{0,1}"
     pattern = re.compile(re_term)
     term_result = re.match(pattern,str(data[1]))
@@ -413,6 +416,10 @@ def adjust_row(data):
         if term[-1] not in "DMYdmy":
             term += "Y"
         adjusted_data.append(StrToDays(term)+StrToDays(term2))
+    else:
+        if data[1] ==u"永续":
+            adjusted_data.append("100000000")
+            term_result = 'perpetuity'
 
     re_price = u"[0-9]{1,2}[.]{0,1}[0-9]{0,4}"
     pattern = re.compile(re_price)
@@ -450,7 +457,7 @@ def adjust_row(data):
         adjusted_data.append(rating1)
         adjusted_data.append(rating2)
 
-    elif data[5] in (' ', '', '0.0','0'):
+    elif data[5] in (' ', '', '0.0','0',0):
         adjusted_data.append("0")
         adjusted_data.append("0")
         rating_result = '0'
@@ -467,6 +474,7 @@ def adjust_row(data):
         adjusted_data.append("error")
 
     return adjusted_data
+
 
 def StrToDays(term):
     term_in_days = 0
@@ -543,7 +551,7 @@ class MainWindow(wx.Frame):
         WIDTH = 80
         HEIGHT = 25
 
-        self.bond_types = [u"短融",u"企业债", u"公司债",u"存单",u"中票",u"其他"]
+        self.bond_types = [u"短融",u"企业债", u"公司债",u"存单",u"中票",u"金融债",u"其他"]
         self.company_ratings = ["AAA+", "AAA", "AAA-", "AA+", "AA", "AA-","A+", "A", "A-","BBB+", "BBB", "BBB-", "BB+", "BB", "BB-", "B+", "B","B-","0"]
         self.bond_ratings = ["AAA+", "AAA", "AAA-", "AA+", "AA", "AA-","A-1","A+", "A", "A-","BBB+", "BBB", "BBB-", "BB+", "BB", "BB-", "B+", "B","B-","A-2","0"]
         self.agencies =[u"平安",u"BGC",u"国际",u"国利",u"信唐",u"空缺"]
@@ -611,20 +619,77 @@ class MainWindow(wx.Frame):
         self.data = []
         self.export_data= []
         self.date      = ""
+        self.queue = Queue()
+        self.success_collection=[]
+        self.fail_collection =[]
 
-        # try:
-        #     self.dbpath = self.GetDBs()[0]
-        # except:
-        #     dialog = wx.MessageDialog(None, u"暂无数据库，请新建至少一个数据库", u"提醒", wx.YES_NO | wx.ICON_QUESTION)
-        #     if dialog.ShowModal() == wx.ID_YES:
-        #         self.CreateDB()
+    def MultiThread(self,data,func,args):
+        startTime = get_time(2)
+        num_thread = 10
+        print func.__doc__
+        for item in data:
+            self.queue.put(item)
+
+        for i in range(num_thread):
+            worker = Thread(target=func,args=args)
+            worker.setDaemon(True)
+            worker.start()
+
+        worker = Thread(target=self.initGauge(self.queue.qsize()))
+        worker.setDaemon(True)
+        worker.start()
+
+        self.queue.join()
+        print "--------Start multi Thread at", startTime
+        print "--------End multi Thread working at,", get_time(2)
+
+
+    def InsertLineToDB(self,host, user, passwd, db):
+        '''
+        -----To insert a line in to data base online-----
+        '''
+        while not self.queue.empty():
+            content = self.queue.get()
+            conn = MySQLdb.connect(host=host, user=user, passwd=passwd, db=db)
+            cursor = conn.cursor()
+
+            try:
+                # print content[:5]
+                cursor.execute("INSERT INTO " + content[0] + " VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s);", content[1:])
+                self.success_collection.append(content[1:])
+
+            except Exception as err:
+                print "InsertLineToDB : Somthing went wrong"
+                print err
+                self.fail_collection.append(content[1:])
+
+            cursor.close()
+            conn.commit()
+            self.queue.task_done()
+
+    def initGauge(self,range):
+        progressMax = range
+        dialog = wx.ProgressDialog(u"数据导入进度",u"导入进度",maximum=progressMax,parent=None,style=wx.PD_AUTO_HIDE|wx.PD_ELAPSED_TIME | wx.PD_REMAINING_TIME)
+        count = 0
+        while count < progressMax:
+            count = range - self.GetCount()
+            wx.Sleep(0.5)
+            dialog.Update(count)
+
+        dialog.Destroy()
+
+    def GetCount(self):
+        if self.queue.qsize():
+            return self.queue.qsize()
+        else:
+            return 0
 
     def OnClose(self,e):
         try:
             if self.connection:
                 self.connection.close()
         except Exception as err:
-            self.ErrDialog(err)
+            self.ErrDialog(err,"On Close ")
 
         self.Destroy()
         e.Skip()
@@ -634,34 +699,56 @@ class MainWindow(wx.Frame):
         dialog = wx.MessageDialog(None, u"确定要从数据库删除这条记录？删除之后数据将无法恢复", u"提醒", wx.YES_NO | wx.ICON_QUESTION)
         if dialog.ShowModal() == wx.ID_YES:
             print "get current selected Range"
-            selected_range = self.xlsFrame.GetCurrentlySelectedRange()
-            for cell in selected_range:
-                row = cell[0]
-                if row > 0:
-                    database_id = self.xlsFrame.GetCellValue(row,8)
-                    table = "tr" +self.xlsFrame.GetCellValue(row,0).replace("-","")[0:6]
-                    try:
-                        if del_row_table(conn=self.connection, id=int(database_id),table=table):
-                            print "delete id= " + database_id + " from database successfully"
-                    except Exception as err:
-                        self.connection.rollback()
-                        print("Something went wrong: {}".format(err))
-                        print "fail to delete id= " + database_id + " from database"
-                        errdialog = wx.MessageDialog(None, u"数据删除失败: \n {}".format(err), u"错误提示",wx.ICON_QUESTION)
-                        if errdialog.ShowModal() ==wx.ID_OK:
-                            sys.exit(0)
+            select_info = self.xlsFrame.GetOffset((0,8))
+            tables = [ "tr"+str(item[0]).replace("-","")[0:6] for item in select_info ]
+            database_ids = [ str(item[1]) for item in select_info ]
+            data_info = ((tables[i],database_ids[i]) for i in range(len(tables)))
+
+            try:
+                if len(tables) <500:
+                    for i in range(len(tables)):
+                        if del_row_table(conn=self.connection, id=int(database_ids[i]),table=tables[i]):
+                                print "delete id= " + database_ids[i] + " from database successfully"
+                else:
+                    self.MultiThread(data=data_info,func=self.DeleteDataFromDB,
+                                         args=(self.host,self.username,self.password,self.db))
+            except Exception as err:
+                self.connection.rollback()
+                print("Something went wrong: {}".format(err))
+                errdialog = wx.MessageDialog(None, u"数据删除失败: \n {}".format(err), u"错误提示", wx.ICON_QUESTION)
+                if errdialog.ShowModal() == wx.ID_OK:
+                    if self.fail_collection:
+                        self.fail_collection.insert(0, database_title)
+                        fail_xlsFrame = XLFrame(self.fail_collection, title=u"导入失败的数据", export_func=self.OnExport)
+                        fail_xlsFrame.Show()
+                    errdialog.Destroy()
+
+            self.fail_collection = []
+            self.success_collection = []
             self.xlsFrame.Destroy()
             self.OnGetData(e)
-    # def OnDB(self,e):
-    #     self.DBFrame = wx.Frame(None,title=u"数据库操作", size = (200,200))
-    #     self.DBFrame.Show()
-    #     p = wx.Panel(self.DBFrame,size =(500,300))
-    #     create_db_btn = wx.Button(p,label=u"新建数据库",pos=(20,20),size=(140,30))
-    #     choose_db_btn = wx.Button(p,label = u"选择默认数据库",pos=(20,60),size=(140,30))
-    #     del_db_btn = wx.Button(p,label = u"删除数据库",pos=(20,100),size=(140,30))
-    #     create_db_btn.Bind(wx.EVT_BUTTON,self.OnCreateDB)
-    #     choose_db_btn.Bind(wx.EVT_BUTTON, self.OnChooseDefaultDB)
-    #     del_db_btn.Bind(wx.EVT_BUTTON, self.OnDelDB)
+
+    def DeleteDataFromDB(self,host, user, passwd, db):
+        '''
+        ------To delete data line by line from data base online------
+        '''
+        while not self.queue.empty():
+            content = self.queue.get()
+            conn = MySQLdb.connect(host=host, user=user, passwd=passwd, db=db)
+            cursor = conn.cursor()
+
+            try:
+                cursor.execute("DELETE FROM %s WHERE ID = %s" % content)
+                print "Successfully DELETE FROM %s WHERE ID = %s " % content
+
+            except Exception as err:
+                print "DeleteDataFromDB : Somthing went wrong"
+                print err
+                self.fail_collection.append(content)
+
+            cursor.close()
+            conn.commit()
+            self.queue.task_done()
 
     def OnGetData(self,e):
         print self.search_text.GetValue()
@@ -675,34 +762,10 @@ class MainWindow(wx.Frame):
                 search_result += search_table(self.connection, search_column, self.search_text.GetValue(), table=table,
                                               filter=filter)
             except Exception as err :
-                self.ErrDialog(err)
+                self.ErrDialog(err,"On Get Data ")
         self.data = search_result
         self.GetData()
 
-    # def OnCreateDB(self,e):
-    #     self.CreateDB()
-    #
-    # def OnChooseDefaultDB(self,e):
-    #     self.ChooseDefaultDB()
-
-    # def OnDelDB(self,e):
-    #     choose_dlg = wx.SingleChoiceDialog(None,message=u"请选择要删除的数据库",caption= u"数据库操作", choices=list(self.GetDBs()))
-    #     if choose_dlg.ShowModal() == wx.ID_OK:
-    #         del_db= choose_dlg.GetStringSelection()
-    #         dialog = wx.MessageDialog(None, u"确定删除数据库？所有数据将被删除，不可修复。", u"警告", wx.YES_NO | wx.ICON_QUESTION)
-    #         if dialog.ShowModal() == wx.ID_YES:
-    #             self.DelDB(del_db)
-    #             dialog.Destroy()
-    #             choose_dlg.Destroy()
-    #     else:
-    #         choose_dlg.Destroy()
-
-    # def onGetData(self,e):
-    #     self.data = []
-    #     for filter_clause in self.GetFilter():
-    #         self.data += select_table(self.connection,filter_clause)
-    #     print "self.data " + str(self.data)
-    #     self.GetData()
 
     def OnExport(self,e):
         wildcard = u"Excel 文件(*.xls)|.xls"
@@ -735,41 +798,82 @@ class MainWindow(wx.Frame):
         dialog = wx.FileDialog(None, "Choose an excel file...", style=wx.OPEN)
         fail_collection = []
         err_exist = False
+        cursor = self.connection.cursor()
+        table = ""
+        data = []
 
         if dialog.ShowModal() == wx.ID_OK:
             self.xlpath = dialog.GetPath()#.encode('utf-8')
             dialog.Destroy()
 
             try:
-                success_collection,fail_collection = import_excel(xlpath= self.xlpath,conn=self.connection)
+                #从excel表中导入成交数据
+                temp_data,fail_collection = import_excel(self.xlpath,self.connection)
+                for item in temp_data:
+                    temp = "tr%s" % item[0][0:6]
+                    # 如果table已存在，最大id为table里的最大id，否则创建新的table，最大id为0
+                    if table != temp:
+                        table = temp
+                        if not IsTableExist(self.connection, table):
+                            create_table(self.connection, table)
+                            max_id = 0
+                        else:
+                            cursor.execute("SELECT MAX(id) FROM %s " % table)
+                            max_id = cursor.fetchone()[0]
+                            if max_id == None: max_id = 0
+
+                        i = max_id + 1
+
+                    data.append((table,i)+tuple(item))
+                    i += 1
+
+                #多线程插入数据至aliyun数据库
+                self.MultiThread(data,self.InsertLineToDB,(self.host,self.username,self.password,self.db))
             except Exception as err:
-                print("OnImport Excel | Something went wrong: {}".format(err))
-                errdlg = wx.MessageDialog(None, u"错误发生: \n {}".format(err), u"错误提示", wx.ICON_QUESTION)
+                self.ErrDialog(err,"On Import Excel")
                 err_exist = True
-                if errdlg.ShowModal() == wx.ID_OK:
-                    errdlg.Destroy()
 
+            # try:
+            #     success_collection,fail_collection = import_excel(xlpath= self.xlpath,conn=self.connection)
+            # except Exception as err:
+            #     print("OnImport Excel | Something went wrong: {}".format(err))
+            #     errdlg = wx.MessageDialog(None, u"错误发生: \n {}".format(err), u"错误提示", wx.ICON_QUESTION)
+            #     err_exist = True
+            #     if errdlg.ShowModal() == wx.ID_OK:
+            #         errdlg.Destroy()
+            #
+            #
 
-            if fail_collection:
-                fail_collection.insert(0,database_title)
-                self.export_data = fail_collection
-                fail_xlsFrame = XLFrame(fail_collection, title=u"导入失败的数据", export_func=self.OnExport)
+            self.fail_collection += fail_collection
+
+            if self.fail_collection:
+                self.fail_collection.insert(0,database_title)
+                fail_xlsFrame = XLFrame(self.fail_collection, title=u"导入失败的数据", export_func=self.OnExport)
                 fail_xlsFrame.Show()
-                successdlg = wx.MessageDialog(None, u"已经导入 %s 条数据"%len(success_collection), u"提示")
+                successdlg = wx.MessageDialog(None, u"已经导入 %s 条数据"%len(self.success_collection), u"提示")
                 if successdlg.ShowModal() == wx.ID_OK:
                     successdlg.Destroy()
             else:
                 if not err_exist:
-                    dialog = wx.MessageDialog(None, u"数据已经全部成功导入数据库",  u"提醒", wx.YES_NO)
+                    dialog = wx.MessageDialog(None, u"数据已经全部成功导入数据库 \n 一共导入 %s 条数据"%len(self.success_collection),  u"提醒", wx.YES_NO)
                     dialog.ShowModal()
 
+            if self.success_collection and err_exist:
+                self.success_collection.insert(0,excel_title)
+                suc_xlsFrame = XLFrame(self.success_collection, title=u"导入成功的数据", export_func=self.OnExport,menu_func=self.OnDelData)
+                suc_xlsFrame.Show()
 
-    def ErrDialog(self,err):
-        print("Something went wrong: {}".format(err))
+            self.success_collection = []
+            self.fail_collection = []
+            cursor.close()
+
+
+    def ErrDialog(self,err,context):
+        print(context+" Something went wrong: {}".format(err))
         if err.args[0] == 2006:
-            errinfo = u"数据库连接失败"
+            errinfo = u" 数据库连接失败"
         else:
-            errinfo = u"出错: \n {}".format(err)
+            errinfo = u" 出错: \n {}".format(err)
 
         errdialog = wx.MessageDialog(None, errinfo, u"错误提示", wx.ICON_QUESTION)
         if errdialog.ShowModal() == wx.ID_OK:
@@ -806,7 +910,7 @@ class MainWindow(wx.Frame):
             try:
                 exist_tables = get_tables(self.connection)
             except Exception as err:
-                self.ErrDialog(err)
+                self.ErrDialog(err,"Get Filter ")
                 exist_tables = []
 
             tables =list(set(selected_tables) & set(exist_tables))
@@ -930,25 +1034,30 @@ class MainWindow(wx.Frame):
         username = ''
         password = ''
         db =''
-        db_dlg = wx.TextEntryDialog(None, u"请输入数据库", "", 'htzq-bonds-db')
+
+        db_dlg = wx.TextEntryDialog(None, u"请输入数据库", "", '-gbk')
         if db_dlg.ShowModal()== wx.ID_OK:
             db = db_dlg.GetValue()
-            user_dlg = wx.TextEntryDialog(None, u"请输入用户名", "", 'htzq')
+            user_dlg = wx.TextEntryDialog(None, u"请输入用户名", "", '')
             if user_dlg.ShowModal() == wx.ID_OK:
                 username = user_dlg.GetValue()
-                pwd_dlg = wx.TextEntryDialog(None, u"请输入密码", "", 'htzq888*')
+                pwd_dlg = wx.TextEntryDialog(None, u"请输入密码", "", '888*')
                 if pwd_dlg.ShowModal() == wx.ID_OK:
                     password = pwd_dlg.GetValue()
 
                     if username and password and db:
                         try:
                             conn = MySQLdb.connect(
-                                host="htzqbonds.mysql.rds.aliyuncs.com",#'rm-m5enrpx3vor980us7.mysql.rds.aliyuncs.com',
+                                host=".mysql.rds.aliyuncs.com",
                                 port=3306,
                                 user=username,
                                 passwd=password,
                                 db=db)
                             print "Successfully connect to MySQL on Aliyun"
+                            self.host = "htzqbonds.mysql.rds.aliyuncs.com"
+                            self.username = username
+                            self.password = password
+                            self.db =db
                             return conn
                         except Exception as err:
                             print("Something went wrong: {}".format(err))
@@ -1001,6 +1110,7 @@ class TreeCtrl(CT.CustomTreeCtrl):
                     self.CheckItem(checked_item,False)
                 # print "remove"
 
+
     def get_tree_children(self,item_obj):
         item_list = []
         (item,cookie) = self.GetFirstChild(item_obj)
@@ -1022,10 +1132,13 @@ class TreeCtrl(CT.CustomTreeCtrl):
     def get_checked_item(self):
         return self.checked_items
 
+
+
 class XLFrame(wx.Frame):
     def __init__(self,data,export_func=None, menu_func = None,title =u"提取数据结果"):
         wx.Frame.__init__(self, parent=None, title=title, size=(800,600))
         panel = wx.Panel(self)
+
         nrow = len(data)
         ncol = len(data[0])+5
         self.myGrid = gridlib.Grid(panel)
@@ -1033,9 +1146,11 @@ class XLFrame(wx.Frame):
         self.myGrid.Bind(gridlib.EVT_GRID_SELECT_CELL, self.onSingleSelect)
         self.myGrid.Bind(gridlib.EVT_GRID_CELL_RIGHT_CLICK,self.onSingleSelect)
         self.myGrid.Bind(gridlib.EVT_GRID_RANGE_SELECT, self.onDragSelection)
-        self.myGrid.Bind(gridlib.EVT_GRID_CELL_RIGHT_CLICK, self.showPopupMenu)
 
-        self.menu_func = menu_func
+        if menu_func:
+            self.myGrid.Bind(gridlib.EVT_GRID_CELL_RIGHT_CLICK, self.showPopupMenu)
+            self.menu_func = menu_func
+
         for i in range(len(data)):
             for j in range(len(data[i])):
                 temp = ""
@@ -1077,7 +1192,6 @@ class XLFrame(wx.Frame):
             self.currentlySelectedRange = self.GetSelectedCells(top_left, bottom_right)
 
 
-
     def onSingleSelect(self, e):
         self.currentlySelectedCell = (e.GetRow(),e.GetCol())
         # print "current selected cell " + str(self.currentlySelectedCell)
@@ -1109,29 +1223,19 @@ class XLFrame(wx.Frame):
         else:
             return [self.currentlySelectedCell]
 
+    def GetOffset(self,offset):
+        offsetRangeValue = []
+        if self.GetCurrentlySelectedRange():
+            for cell in self.GetCurrentlySelectedRange():
+                temp=[]
+                for i in offset:
+                    temp.append(self.myGrid.GetCellValue(cell[0],cell[1]+i))
+                offsetRangeValue.append(temp)
+        return offsetRangeValue
+
     def GetCellValue(self,row,col):
         return self.myGrid.GetCellValue(row,col)
 
-# class GaugeFrame(wx.Frame):
-#     def __init__(self,func=None):
-#         wx.Frame.__init__(self, None, -1, 'Gauge Example',
-#                           size=(350, 150))
-#         panel = wx.Panel(self, -1)
-#         self.count = 0
-#         self.gauge = wx.Gauge(panel, -1, 50, (20, 50), (250, 25))
-#         self.gauge.SetBezelFace(3)
-#         self.gauge.SetShadowWidth(3)
-#         self.Bind(wx.EVT_IDLE, self.OnIdle)
-#         self.func = func
-#
-#     def OnIdle(self, e):
-#         self.count = self.count + 1
-#         if self.count == self.func():
-#             self.Hide()
-#         self.gauge.SetValue(self.count)
-#
-#     def SetCount(self,count):
-#         self.count = count
 
 if __name__ == "__main__":
     print get_time()
