@@ -233,7 +233,6 @@ def insert_local_table(dbpath,data):
 
     for item in data:
         temp = (i,) + tuple(item)
-        # print temp
         try:
             cursor.execute("INSERT INTO TR VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?);", temp)
             i += 1
@@ -250,7 +249,7 @@ def IsTableExist(conn,table):
     cursor = conn.cursor()
     tables = []
     try:
-        cursor.execute("SHOW TABLES")  # Select Name from sqlite_master where type ='table' order by name")
+        cursor.execute("SHOW TABLES")
         result = cursor.fetchall()
         tables.extend(x[0] for x in result)
     except Exception as err:
@@ -263,7 +262,6 @@ def IsTableExist(conn,table):
         return False
 
     if table in tables:
-        # print table + " exists "
         return True
     else:
         print table + " not exist "
@@ -329,9 +327,7 @@ def get_tables(conn):
     cursor = conn.cursor()
     tables = []
     cursor.execute("SHOW TABLES")
-    # print "## get names of tables ##"
     result = cursor.fetchall()
-    # print result
     tables.extend(x[0] for x in result)
     cursor.close()
     tables.sort(reverse=True)
@@ -452,8 +448,7 @@ def adjust_row(data):
             rating1 = "0"
         if result2 != None:
             rating2 = result2.group(0).replace("/","")
-        # else:
-        #     rating2 = rating1
+
         adjusted_data.append(rating1)
         adjusted_data.append(rating2)
 
@@ -545,7 +540,7 @@ class MainWindow(wx.Frame):
             sys.exit(0)
 
         wx.Frame.__init__(self, parent, title = title,size = (700,300))
-        # self.gaugeFrame = GaugeFrame()
+
         ANCHOR = 20
         SPACE = 10
         WIDTH = 80
@@ -568,13 +563,10 @@ class MainWindow(wx.Frame):
         xl_button  = wx.Button(bkg, label = u"导入excel",    size = (WIDTH,HEIGHT), pos=(ANCHOR+(WIDTH+SPACE)*6.2,ANCHOR+(HEIGHT+SPACE)*2))
         xl_button.Bind(wx.EVT_BUTTON, self.OnImportExcel)
 
-        # search_button = wx.Button(bkg, label=u"搜索",size=(WIDTH*0.8,HEIGHT), pos = (ANCHOR+WIDTH+WIDTH/1.5,ANCHOR))
         self.search_text = wx.TextCtrl(bkg,size = (WIDTH,HEIGHT), style= wx.TE_PROCESS_ENTER, pos = (ANCHOR+WIDTH+SPACE,ANCHOR+SPACE))
         self.search_text.Bind(wx.EVT_TEXT_ENTER, self.OnGetData)
-        # search_button.Bind(wx.EVT_BUTTON, self.OnSearch)
         self.search_column_cb = wx.ComboBox(bkg,choices=self.search_column[0], size=(WIDTH/1.5,HEIGHT),pos =(ANCHOR+(WIDTH+SPACE/2)*2,ANCHOR+SPACE),value= self.search_column[0][0])
-        # self.advance_search_cb = wx.CheckBox(bkg,-1,u"高级搜索",pos=(ANCHOR+WIDTH*2.5+SPACE,ANCHOR))
-        # self.advance_search_cb.SetValue(True)
+
 
         self.BondTypeTree = TreeCtrl(parent =bkg,id = wx.NewId(), pos=(ANCHOR,ANCHOR+(HEIGHT+SPACE)*4),
                                      size =(WIDTH*2,HEIGHT*4.5),root=u"全部类型",items=self.bond_types)
@@ -654,7 +646,7 @@ class MainWindow(wx.Frame):
             cursor = conn.cursor()
 
             try:
-                # print content[:5]
+
                 cursor.execute("INSERT INTO " + content[0] + " VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s);", content[1:])
                 self.success_collection.append(content[1:])
 
@@ -700,6 +692,7 @@ class MainWindow(wx.Frame):
         if dialog.ShowModal() == wx.ID_YES:
             print "get current selected Range"
             select_info = self.xlsFrame.GetOffset((0,8))
+            select_row = self.xlsFrame.GetCurrentlySelectedRows()
             tables = [ "tr"+str(item[0]).replace("-","")[0:6] for item in select_info ]
             database_ids = [ str(item[1]) for item in select_info ]
             data_info = ((tables[i],database_ids[i]) for i in range(len(tables)))
@@ -719,14 +712,24 @@ class MainWindow(wx.Frame):
                 if errdialog.ShowModal() == wx.ID_OK:
                     if self.fail_collection:
                         self.fail_collection.insert(0, database_title)
-                        fail_xlsFrame = XLFrame(self.fail_collection, title=u"导入失败的数据", export_func=self.OnExport)
+                        fail_xlsFrame = XLFrame(self.fail_collection, title=u"删除失败的数据", export_func=self.OnExport)
                         fail_xlsFrame.Show()
                     errdialog.Destroy()
 
             self.fail_collection = []
             self.success_collection = []
+
+            temp_data = self.xlsFrame.GetData()
             self.xlsFrame.Destroy()
-            self.OnGetData(e)
+            export_data = []
+            for i in range(len(temp_data)):
+                if i not in select_row:
+                    export_data.append(temp_data[i])
+
+            self.xlsFrame = XLFrame(export_data, self.OnExport, self.OnDelData)
+            self.xlsFrame.Show()
+
+
 
     def DeleteDataFromDB(self,host, user, passwd, db):
         '''
@@ -750,13 +753,15 @@ class MainWindow(wx.Frame):
             conn.commit()
             self.queue.task_done()
 
+
     def OnGetData(self,e):
         print self.search_text.GetValue()
-        # advance_search = self.advance_search_cb.GetValue()
+
         search_result = []
         search_column =self.search_column[1][self.search_column[0].index(self.search_column_cb.GetValue())]
 
         tables,filter = self.GetFilter(type=1)
+
         for table in tables:
             try:
                 search_result += search_table(self.connection, search_column, self.search_text.GetValue(), table=table,
@@ -960,99 +965,32 @@ class MainWindow(wx.Frame):
         if export_data:
             self.xlsFrame = XLFrame(export_data, self.OnExport, self.OnDelData)
             self.xlsFrame.Show()
-    #
-    # def ChooseDefaultDB(self):
-    #     if self.GetDBs() ==():
-    #         dialog = wx.MessageDialog(None, u"暂无数据库，请新建至少一个数据库", u"提醒", wx.YES_NO | wx.ICON_QUESTION)
-    #         if dialog.ShowModal() == wx.ID_YES:
-    #             if(self.CreateDB()):
-    #                 self.ChooseDefaultDB()
-    #     else:
-    #         choose_dlg = wx.SingleChoiceDialog(None,message=u"请选择默认使用的数据库",caption= u"数据库操作", choices=list(self.GetDBs()))
-    #         if choose_dlg.ShowModal() == wx.ID_OK:
-    #             chosen_db = choose_dlg.GetStringSelection()
-    #             self.SetDefaultDB(chosen_db)
-    #             self.dbpath = chosen_db
-    #             choose_dlg.Destroy()
-    #
-    #
-    # def CreateDB(self):
-    #     dialog = wx.TextEntryDialog(None, u"请输入数据库名称(英文)..", "","tr" )
-    #     if dialog.ShowModal() == wx.ID_OK:
-    #         dbpath= dialog.GetValue() +".db"
-    #         self.AddDB(dbpath)
-    #             # create_table(dbpath)
-    #
-    # def DelDB(self, del_db):
-    #     temp = self.GetDBs()
-    #     dbs = ()
-    #     for db in temp:
-    #         if db != del_db:
-    #             dbs += (db,)
-    #     os.remove(del_db)
-    #     print "Del db " + del_db
-    #     self.SetDBs(dbs)
-    #
-    # def AddDB(self,add_db):
-    #     temp = self.GetDBs()
-    #     if add_db in temp:
-    #         dlg = wx.MessageDialog(None, u"数据库已存在", u"错误提示", wx.YES_NO | wx.ICON_QUESTION)
-    #         if dlg.ShowModal() == wx.ID_YES:
-    #             dlg.Destroy()
-    #         return False
-    #     else:
-    #         dbs = temp + (add_db,)
-    #         self.SetDBs(dbs)
-    #         print "Add db " + add_db
-    #         return True
-    #
-    # def GetDBs(self):
-    #     try:
-    #         dbs = pickle.load(open('dbs.pkl', 'rb'))
-    #         print "Get dbs " + str(dbs)
-    #         return dbs
-    #     except:
-    #         return ()
-    #
-    # def SetDefaultDB(self, chosen_db):
-    #     temp = self.GetDBs()
-    #     dbs = (chosen_db,)
-    #     for db in temp:
-    #         if db!= chosen_db:
-    #             dbs += (db,)
-    #     self.SetDBs(dbs)
-    #     print "Set default db " + chosen_db
-    #
-    # def SetDBs(self,dbs):
-    #     try:
-    #         pickle.dump(dbs, open('dbs.pkl', 'wb'))
-    #         print "Set dbs " + str(dbs)
-    #     except:
-    #         print "fail to set dbs"
+
 
     def Connect_MySQL(self):
         username = ''
         password = ''
         db =''
 
-        db_dlg = wx.TextEntryDialog(None, u"请输入数据库", "", '-gbk')
+        db_dlg = wx.TextEntryDialog(None, u"请输入数据库", "", 'htzq-bonds-utf8')
         if db_dlg.ShowModal()== wx.ID_OK:
             db = db_dlg.GetValue()
-            user_dlg = wx.TextEntryDialog(None, u"请输入用户名", "", '')
+            user_dlg = wx.TextEntryDialog(None, u"请输入用户名", "", 'htzq')
             if user_dlg.ShowModal() == wx.ID_OK:
                 username = user_dlg.GetValue()
-                pwd_dlg = wx.TextEntryDialog(None, u"请输入密码", "", '888*')
+                pwd_dlg = wx.TextEntryDialog(None, u"请输入密码", "", 'htzq888*')
                 if pwd_dlg.ShowModal() == wx.ID_OK:
                     password = pwd_dlg.GetValue()
 
                     if username and password and db:
                         try:
                             conn = MySQLdb.connect(
-                                host=".mysql.rds.aliyuncs.com",
+                                host="htzqbonds.mysql.rds.aliyuncs.com",
                                 port=3306,
                                 user=username,
                                 passwd=password,
-                                db=db)
+                                db=db,
+                                charset='utf8')
                             print "Successfully connect to MySQL on Aliyun"
                             self.host = "htzqbonds.mysql.rds.aliyuncs.com"
                             self.username = username
@@ -1108,7 +1046,6 @@ class TreeCtrl(CT.CustomTreeCtrl):
                     for item in self.get_tree_children(self.root):
                         self.CheckItem(item, True)
                     self.CheckItem(checked_item,False)
-                # print "remove"
 
 
     def get_tree_children(self,item_obj):
@@ -1125,7 +1062,6 @@ class TreeCtrl(CT.CustomTreeCtrl):
         (item,cookie) = self.GetFirstChild(item_obj)
         while item:
             item_list.append(item)
-            # print "OK "
             (item,cookie) = self.GetNextChild(item_obj,cookie)
         return item_list[index]
 
@@ -1138,7 +1074,7 @@ class XLFrame(wx.Frame):
     def __init__(self,data,export_func=None, menu_func = None,title =u"提取数据结果"):
         wx.Frame.__init__(self, parent=None, title=title, size=(800,600))
         panel = wx.Panel(self)
-
+        self.data = data
         nrow = len(data)
         ncol = len(data[0])+5
         self.myGrid = gridlib.Grid(panel)
@@ -1184,7 +1120,7 @@ class XLFrame(wx.Frame):
         self.PopupMenu(menu)
         menu.Destroy()
 
-        # ----------------------------------------------------------------------
+
     def onDragSelection(self, e):
         if self.myGrid.GetSelectionBlockTopLeft():
             top_left = self.myGrid.GetSelectionBlockTopLeft()[0]
@@ -1196,6 +1132,7 @@ class XLFrame(wx.Frame):
         self.currentlySelectedCell = (e.GetRow(),e.GetCol())
         # print "current selected cell " + str(self.currentlySelectedCell)
         e.Skip()
+
 
     def GetSelectedCells(self, top_left, bottom_right):
         cells = []
@@ -1214,14 +1151,17 @@ class XLFrame(wx.Frame):
                       for col in cols])
         return cells
 
+
     def GetCurrentlySelectedCell(self):
         return self.currentlySelectedCell
+
 
     def GetCurrentlySelectedRange(self):
         if self.currentlySelectedRange:
             return self.currentlySelectedRange
         else:
             return [self.currentlySelectedCell]
+
 
     def GetOffset(self,offset):
         offsetRangeValue = []
@@ -1233,8 +1173,17 @@ class XLFrame(wx.Frame):
                 offsetRangeValue.append(temp)
         return offsetRangeValue
 
+
+    def GetCurrentlySelectedRows(self):
+        return [x[0] for x in self.GetCurrentlySelectedRange()]
+
+
     def GetCellValue(self,row,col):
         return self.myGrid.GetCellValue(row,col)
+
+
+    def GetData(self):
+        return self.data
 
 
 if __name__ == "__main__":
