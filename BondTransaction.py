@@ -972,20 +972,20 @@ class MainWindow(wx.Frame):
         password = ''
         db =''
 
-        db_dlg = wx.TextEntryDialog(None, u"请输入数据库", "", 'htzq-bonds-utf8')
+        db_dlg = wx.TextEntryDialog(None, u"请输入数据库", "", '')
         if db_dlg.ShowModal()== wx.ID_OK:
             db = db_dlg.GetValue()
-            user_dlg = wx.TextEntryDialog(None, u"请输入用户名", "", 'htzq')
+            user_dlg = wx.TextEntryDialog(None, u"请输入用户名", "", '')
             if user_dlg.ShowModal() == wx.ID_OK:
                 username = user_dlg.GetValue()
-                pwd_dlg = wx.TextEntryDialog(None, u"请输入密码", "", 'htzq888*')
+                pwd_dlg = wx.TextEntryDialog(None, u"请输入密码", "", '')
                 if pwd_dlg.ShowModal() == wx.ID_OK:
                     password = pwd_dlg.GetValue()
 
                     if username and password and db:
                         try:
                             conn = MySQLdb.connect(
-                                host="htzqbonds.mysql.rds.aliyuncs.com",
+                                host=".mysql.rds.aliyuncs.com",
                                 port=3306,
                                 user=username,
                                 passwd=password,
